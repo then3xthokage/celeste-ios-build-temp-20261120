@@ -1,0 +1,90 @@
+name: Symbolicate Celeste iOS crash
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbols_run_id:
+        description: Build run ID containing the private iOS dSYM
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  symbolicate:
+    if: github.ref == 'refs/heads/celeste-ios-build'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download private iOS symbols
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+          SYMBOLS_RUN_ID: ${{ inputs.symbols_run_id }}
+        run: |
+          set -euo pipefail
+          storage_repo="hbashton/celeste-ios-ci-temp-20261120"
+          symbols_dir="$RUNNER_TEMP/celeste-ios-symbols"
+          if ! [[ "$SYMBOLS_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "symbols_run_id must contain digits only." >&2
+            exit 1
+          fi
+          mkdir -p "$symbols_dir"
+          gh release download celeste-ios-build-output \
+            --repo "$storage_repo" \
+            --pattern "ci-ios-symbols-${SYMBOLS_RUN_ID}.zip" \
+            --dir "$symbols_dir"
+          unzip -q "$symbols_dir/ci-ios-symbols-${SYMBOLS_RUN_ID}.zip" -d "$symbols_dir"
+          dwarf_file="$(find "$symbols_dir" -type f -path '*/Contents/Resources/DWARF/ci-ios' -print -quit)"
+          if [ -z "$dwarf_file" ]; then
+            echo "The requested private dSYM does not contain ci-ios symbols." >&2
+            exit 1
+          fi
+          echo "dwarf_file=$dwarf_file" >> "$GITHUB_ENV"
+
+      - name: Symbolicate the iPhone launch stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/symbolicated-launch-crash-$GITHUB_RUN_ID.txt"
+          cat > "$output" <<'EOF'
+          Source: ci-ios-2026-11-21-015656.ips
+          Thread: main thread, iPhone 15 Pro
+          App image base: 0x1042c8000
+          App image offsets are mapped against the matching code layout from the private dSYM.
+
+          Frame addresses, in order:
+          0x105ddb524
+          0x105d87524
+          0x105b341c0
+          0x105cd1140
+          0x105d62694
+          0x105b3c568
+          0x105db5c68
+
+          Symbolicated frames, in the same order:
+          EOF
+          xcrun atos \
+            -arch arm64 \
+            -o "$dwarf_file" \
+            -l 0x1042c8000 \
+            0x105ddb524 0x105d87524 0x105b341c0 0x105cd1140 \
+            0x105d62694 0x105b3c568 0x105db5c68 >> "$output" 2>&1
+          echo "Symbolication output prepared for private storage."
+
+      - name: Store symbolicated stack privately
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload celeste-ios-build-output \
+            "$RUNNER_TEMP/symbolicated-launch-crash-$GITHUB_RUN_ID.txt" \
+            --repo hbashton/celeste-ios-ci-temp-20261120
+
+      - name: Remove private symbols from the runner
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/celeste-ios-symbols" "$RUNNER_TEMP/symbolicated-launch-crash-$GITHUB_RUN_ID.txt"
