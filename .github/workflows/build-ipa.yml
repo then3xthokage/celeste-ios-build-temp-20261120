@@ -23,8 +23,10 @@ jobs:
       - name: Check required private secrets
         shell: bash
         env:
+          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
           PRIVATE_STORAGE_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
           CACHE_KEY: ${{ secrets.GAME_CACHE_KEY }}
+          PRIVATE_STORAGE_REPO: hbashton/celeste-ios-ci-temp-20261120
         run: |
           set -euo pipefail
           if [ -z "${PRIVATE_STORAGE_TOKEN:-}" ]; then
@@ -34,6 +36,21 @@ jobs:
           if ! [[ "${CACHE_KEY:-}" =~ ^[a-fA-F0-9]{64}$ ]]; then
             echo "The GAME_CACHE_KEY Actions secret is missing or invalid." >&2
             exit 1
+          fi
+          if ! gh api "repos/$PRIVATE_STORAGE_REPO/releases/tags/celeste-input" --jq '.tag_name' >/dev/null 2>&1; then
+            echo "PRIVATE_STORAGE_TOKEN cannot read the private input release. Check that its resource owner is hbashton, its repository selection includes celeste-ios-ci-temp-20261120, and Contents has read access." >&2
+            exit 1
+          fi
+          output_tag="celeste-ios-build-output"
+          if ! gh release view "$output_tag" --repo "$PRIVATE_STORAGE_REPO" >/dev/null 2>&1; then
+            if ! gh release create "$output_tag" \
+              --repo "$PRIVATE_STORAGE_REPO" \
+              --title "Latest Celeste iOS IPA" \
+              --notes "Private build output. Replaced by each successful run." \
+              --target celeste-ios-build; then
+              echo "PRIVATE_STORAGE_TOKEN can read private files but cannot create the private IPA release. Grant Contents write access to the private storage repository." >&2
+              exit 1
+            fi
           fi
 
       - name: Restore encrypted private input cache
