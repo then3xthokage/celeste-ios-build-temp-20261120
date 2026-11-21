@@ -290,6 +290,39 @@ apply_patch "$script_dir/patches/FNA.patch"
 cd "$script_dir/FNA/lib/FNA3D" || cd_fail
 apply_patch "$script_dir/patches/FNA-FNA3D-renderer.patch"
 
+info "pointing statically linked FNA libraries at the iOS executable"
+python3 - "$script_dir/FNA" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+libraries = ("SDL2", "FNA3D", "FAudio", "libtheorafile")
+counts = {library: 0 for library in libraries}
+
+for path in root.rglob("*.cs"):
+    source = path.read_text()
+    updated = source
+    for library in libraries:
+        literal = re.escape(library)
+        const_pattern = re.compile(
+            r'(\bconst\s+string\s+\w+\s*=\s*)"' + literal + r'"'
+        )
+        import_pattern = re.compile(
+            r'(\[\s*(?:DllImport|LibraryImport)\s*\(\s*)"' + literal + r'"'
+        )
+        updated, const_count = const_pattern.subn(r'\1"__Internal"', updated)
+        updated, import_count = import_pattern.subn(r'\1"__Internal"', updated)
+        counts[library] += const_count + import_count
+    if updated != source:
+        path.write_text(updated)
+
+missing = [library for library, count in counts.items() if count == 0]
+if missing:
+    raise SystemExit("Could not patch FNA native imports: " + ", ".join(missing))
+print("Patched FNA native imports: " + ", ".join(f"{name}={count}" for name, count in counts.items()))
+PY
+
 cd "$script_dir" || cd_fail
 info "recursively copying celeste game directory"
 if [ "${CELESTE_GAME_INPUT_IN_PLACE:-0}" = "1" ]; then
@@ -334,14 +367,27 @@ if [ "$celeste_is_steam" == "1" ]; then
 fi
 python3 - "$script_dir/_celeste_decomp" <<'PY'
 import pathlib
+import re
 import sys
 
 root = pathlib.Path(sys.argv[1])
+fmod_libraries = ("libfmodstudio", "libfmod", "fmodstudio", "fmod")
+fmod_counts = {library: 0 for library in fmod_libraries}
 for path in root.rglob("*.cs"):
     source = path.read_text()
     updated = source.replace("Assembly.GetEntryAssembly()", "Assembly.GetExecutingAssembly()")
+    for library in fmod_libraries:
+        pattern = re.compile(
+            r'(\[\s*DllImport\s*\(\s*)"' + re.escape(library) + r'"'
+        )
+        updated, count = pattern.subn(r'\1"__Internal"', updated)
+        fmod_counts[library] += count
     if updated != source:
         path.write_text(updated)
+
+if sum(fmod_counts.values()) == 0:
+    raise SystemExit("Could not find any FMOD DllImport declarations to link statically")
+print("Patched FMOD native imports: " + ", ".join(f"{name}={count}" for name, count in fmod_counts.items()))
 
 settings = root / "Celeste" / "Settings.cs"
 source = settings.read_text()

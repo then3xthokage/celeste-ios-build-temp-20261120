@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Reflection;
 using System.IO;
-using System.Runtime.InteropServices;
 using SDL2;
 
 namespace celestemeow
@@ -22,8 +21,6 @@ namespace celestemeow
                 */
 
                 Console.WriteLine("running from ios - enabling workarounds!");
-                RegisterNativeLibraryResolvers();
-
                 // Enable high DPI "Retina" support. Trust us, you'll want this.
                 Environment.SetEnvironmentVariable("FNA_GRAPHICS_ENABLE_HIGHDPI", "1");
 
@@ -45,45 +42,6 @@ namespace celestemeow
         }
 
         static string[] realArgs;
-
-        static IntPtr internalLibraryHandle;
-        static readonly object internalLibraryLock = new object();
-
-        static void RegisterNativeLibraryResolvers()
-        {
-            NativeLibrary.SetDllImportResolver(typeof(Application).Assembly, ResolveNativeLibrary);
-            NativeLibrary.SetDllImportResolver(typeof(SDL2.SDL).Assembly, ResolveNativeLibrary);
-            NativeLibrary.SetDllImportResolver(typeof(Celeste.Celeste).Assembly, ResolveNativeLibrary);
-        }
-
-        static IntPtr ResolveNativeLibrary(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
-        {
-            switch (libraryName)
-            {
-                case "SDL2":
-                case "FNA3D":
-                case "FAudio":
-                case "libtheorafile":
-                case "libfmodstudio":
-                case "libfmod":
-                case "fmodstudio":
-                case "fmod":
-                    break;
-                default:
-                    return IntPtr.Zero;
-            }
-
-            if (internalLibraryHandle == IntPtr.Zero)
-            {
-                lock (internalLibraryLock)
-                {
-                    if (internalLibraryHandle == IntPtr.Zero)
-                        internalLibraryHandle = NativeLibrary.Load("__Internal", assembly, searchPath);
-                }
-            }
-
-            return internalLibraryHandle;
-        }
 
         [ObjCRuntime.MonoPInvokeCallback(typeof(SDL2.SDL.SDL_main_func))]
         static int FakeMain(int argc, IntPtr argv)
