@@ -330,11 +330,13 @@ def keep_unavailable_imports_dynamic(source, fallback_libraries):
     matches = list(pattern.finditer(source))
     for match in reversed(matches):
         method = match.group("method")
-        fallback = fallback_libraries.get(method)
+        entrypoint = re.search(r'\bEntryPoint\s*=\s*"([^"]+)"', match.group("arguments"))
+        native_symbol = entrypoint.group(1) if entrypoint else method
+        fallback = fallback_libraries.get(native_symbol) or fallback_libraries.get(method)
         if fallback is not None:
             start, end = match.span("library")
             source = source[:start] + f'"{fallback}"' + source[end:]
-            dynamic_counts[method] += 1
+            dynamic_counts[native_symbol] += 1
     return source
 
 for path in root.rglob("*.cs"):
@@ -435,11 +437,13 @@ def keep_unavailable_imports_dynamic(source, fallback_libraries):
     matches = list(pattern.finditer(source))
     for match in reversed(matches):
         method = match.group("method")
-        fallback = fallback_libraries.get(method)
+        entrypoint = re.search(r'\bEntryPoint\s*=\s*"([^"]+)"', match.group("arguments"))
+        native_symbol = entrypoint.group(1) if entrypoint else method
+        fallback = fallback_libraries.get(native_symbol) or fallback_libraries.get(method)
         if fallback is not None:
             start, end = match.span("library")
             source = source[:start] + f'"{fallback}"' + source[end:]
-            fmod_dynamic_counts[method] += 1
+            fmod_dynamic_counts[native_symbol] += 1
     return source
 
 for path in root.rglob("*.cs"):
