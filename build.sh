@@ -375,6 +375,18 @@ copy_game_files "$script_dir/celeste/Celeste.dll.config" "$script_dir/celestemeo
 info "building native libraries"
 cd "$script_dir/fnalibs-ios-builder-celeste" || cd_fail
 
+remove_duplicate_vorbis_objects() {
+	local archive="$script_dir/celestemeow/libtheorafile.a"
+	for object in smallft.o lpc.o; do
+		if ar -t "$archive" | grep -Fxq "$object"; then
+			if ! ar -d "$archive" "$object"; then
+				error "failed to remove duplicate Vorbis object '$object' from libtheorafile.a"
+				exit 1
+			fi
+		fi
+	done
+}
+
 nativelib_build_err() {
 	error "failed to build native libraries!"
 	error "do you want to use the prebuilt libraries? [Y/n]\c" 1
@@ -403,6 +415,7 @@ if [ "${USE_CACHED_NATIVE_LIBS:-0}" = "1" ]; then
 		error "failed to copy cached native libraries"
 		exit 1
 	fi
+	remove_duplicate_vorbis_objects
 else
 	if ! ./updatelibs.sh; then nativelib_build_err; fi
 	while true; do
@@ -420,6 +433,7 @@ else
 	done
 	if ! ./buildlibs.sh ios; then nativelib_build_err; fi
 	if ! cp -r "$script_dir/fnalibs-ios-builder-celeste/release/ios/device/." "$script_dir/celestemeow/"; then nativelib_build_err; fi
+	remove_duplicate_vorbis_objects
 fi
 
 cd "$script_dir" || cd_fail
