@@ -262,6 +262,30 @@ jobs:
             --repo "$storage_repo" \
             --clobber
 
+      - name: Preserve matching iOS crash symbols
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+        run: |
+          set -euo pipefail
+          storage_repo="hbashton/celeste-ios-ci-temp-20261120"
+          output_tag="celeste-ios-build-output"
+          symbol_dir="$(find "$GITHUB_WORKSPACE/celestemeow/bin" -type d -name 'ci-ios.app.dSYM' -print -quit)"
+          if [ -z "$symbol_dir" ]; then
+            echo "No ci-ios.app.dSYM directory was generated."
+            exit 1
+          fi
+          dwarf_file="$symbol_dir/Contents/Resources/DWARF/ci-ios"
+          if [ ! -s "$dwarf_file" ]; then
+            echo "The ci-ios.dSYM bundle has no DWARF symbol file."
+            exit 1
+          fi
+          xcrun dwarfdump --uuid "$dwarf_file"
+          symbol_archive="$RUNNER_TEMP/ci-ios-symbols-$GITHUB_RUN_ID.zip"
+          ditto -c -k --keepParent "$symbol_dir" "$symbol_archive"
+          gh release upload "$output_tag" "$symbol_archive" --repo "$storage_repo"
+
       - name: Remove private build files from the runner
         if: always()
         shell: bash
