@@ -190,9 +190,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: fnalibs-ios-builder-celeste/release/ios/device
-          key: celeste-ios-native-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-${{ hashFiles('patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}
+          key: celeste-ios-native-controller-only-v1-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-${{ hashFiles('patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}
           restore-keys: |
-            celeste-ios-native-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-
+            celeste-ios-native-controller-only-v1-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-
 
       - name: Check cached native libraries
         id: native-libraries
@@ -213,6 +213,7 @@ jobs:
           GAME_DIR: ${{ steps.input-paths.outputs.game_dir }}
           FMOD_ROOT: ${{ steps.input-paths.outputs.fmod_root }}
           USE_CACHED_NATIVE_LIBS: ${{ steps.native-libraries.outputs.use_cache }}
+          ENABLE_VIRTUAL_CONTROLLER: '0'
           CELESTE_GAME_INPUT_IN_PLACE: '1'
         run: |
           set -euo pipefail
@@ -221,7 +222,7 @@ jobs:
           cp "$fmod_lowlevel" celestemeow/libfmod.a
           cp "$fmod_studio" celestemeow/libfmodstudio.a
           git config --global url.https://github.com/.insteadOf git://github.com/
-          printf '%s\ny\ny\n' "$GAME_DIR" | ./build.sh
+          printf '%s\ny\n' "$GAME_DIR" | ./build.sh
 
       - name: Check native libraries for cache
         id: native-ready
@@ -241,7 +242,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: fnalibs-ios-builder-celeste/release/ios/device
-          key: celeste-ios-native-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-${{ hashFiles('patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}
+          key: celeste-ios-native-controller-only-v1-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-${{ hashFiles('patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}
 
       - name: Store IPA in private release
         shell: bash

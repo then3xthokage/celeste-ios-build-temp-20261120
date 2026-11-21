@@ -18,6 +18,10 @@ these instructions might be slightly wrong or have missing information because i
 ## installing
 the script will tell you where the final .ipa file is located - just sideload it to your iOS device using something like TrollStore, AltStore or similar
 
+## controller input
+- This iOS build is intended for a physical game controller. Pair or connect the controller before launching Celeste.
+- SDL's normal iOS game-controller input stays enabled; the optional on-screen virtual controller is disabled by default.
+
 ## credits
 - **@TheSpydog** for demonstrating this being possible and for developing the fnalibs-ios-builder
 - **@r58Playz** for adding touch controls(!) and fixing building on newer Xcode versions
