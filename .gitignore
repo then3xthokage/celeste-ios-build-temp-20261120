@@ -1,0 +1,10 @@
+_celeste_game/
+_celeste_decomp/
+celeste/
+/celestemeow/bin/
+/celestemeow/obj/
+/celestemeow/Content/
+/celestemeow/lib*.a
+/celestemeow/*.dll
+/celestemeow/*.exe
+/*.ipa
