@@ -3,7 +3,7 @@
     <TargetFramework>net8.0-ios</TargetFramework>
     <OutputType>Exe</OutputType>
     <RuntimeIdentifier>ios-arm64</RuntimeIdentifier>
-    <SupportedOSPlatformVersion>13.4</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
     <DefineConstants>$(DefineConstants);__IOS__</DefineConstants>
     <ApplicationTitle>Celeste</ApplicationTitle>
     <ApplicationId>gay.rooot.celestemeow</ApplicationId>
@@ -37,66 +37,47 @@
       <Kind>Static</Kind>
       <ForceLoad>true</ForceLoad>
       <IsCxx>true</IsCxx>
+      <Frameworks>AVFAudio AVFoundation AudioToolbox CoreAudio CoreBluetooth CoreGraphics CoreHaptics CoreMedia CoreMotion CoreVideo GameController IOSurface Metal MobileCoreServices OpenGLES QuartzCore UIKit VideoToolbox</Frameworks>
     </NativeReference>
     <NativeReference Include="libFNA3D.a">
       <Kind>Static</Kind>
       <ForceLoad>true</ForceLoad>
       <IsCxx>true</IsCxx>
+      <Frameworks>CoreGraphics CoreVideo IOSurface Metal QuartzCore UIKit</Frameworks>
     </NativeReference>
     <NativeReference Include="libFAudio.a">
       <Kind>Static</Kind>
       <ForceLoad>true</ForceLoad>
       <IsCxx>true</IsCxx>
+      <Frameworks>AVFAudio AVFoundation AudioToolbox CoreAudio CoreMedia</Frameworks>
     </NativeReference>
     <NativeReference Include="libtheorafile.a">
       <Kind>Static</Kind>
       <ForceLoad>true</ForceLoad>
       <IsCxx>true</IsCxx>
+      <Frameworks>CoreMedia CoreVideo VideoToolbox</Frameworks>
     </NativeReference>
     <NativeReference Include="libMoltenVK.a">
       <Kind>Static</Kind>
       <ForceLoad>true</ForceLoad>
       <IsCxx>true</IsCxx>
+      <Frameworks>CoreGraphics IOSurface Metal QuartzCore</Frameworks>
     </NativeReference>
     <NativeReference Include="libfmod.a">
       <Kind>Static</Kind>
       <ForceLoad>true</ForceLoad>
       <IsCxx>true</IsCxx>
+      <Frameworks>AVFAudio AVFoundation AudioToolbox CoreAudio CoreMedia</Frameworks>
     </NativeReference>
     <NativeReference Include="libfmodstudio.a">
       <Kind>Static</Kind>
       <ForceLoad>true</ForceLoad>
       <IsCxx>true</IsCxx>
+      <Frameworks>AVFAudio AVFoundation AudioToolbox CoreAudio CoreMedia</Frameworks>
     </NativeReference>
   </ItemGroup>
 
   <ItemGroup>
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="AVFoundation" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="AudioToolbox" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="CoreGraphics" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="Metal" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="QuartzCore" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="OpenGLES" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="GameController" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="CoreMotion" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="MobileCoreServices" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="ImageIO" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="CoreHaptics" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="CoreBluetooth" />
-    <LinkerArgument Include="-framework" />
-    <LinkerArgument Include="IOSurface" />
     <LinkerArgument Include="-lc++" />
   </ItemGroup>
 </Project>
