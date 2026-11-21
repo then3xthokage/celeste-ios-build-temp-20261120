@@ -299,6 +299,43 @@ import sys
 root = pathlib.Path(sys.argv[1])
 libraries = ("SDL2", "FNA3D", "FAudio", "libtheorafile")
 counts = {library: 0 for library in libraries}
+ios_dynamic_imports = {
+    "SDL2": {
+        "SDL_AndroidBackButton",
+        "SDL_AndroidGetActivity",
+        "SDL_AndroidGetExternalStoragePath",
+        "SDL_AndroidGetExternalStorageState",
+        "SDL_AndroidGetInternalStoragePath",
+        "SDL_AndroidGetJNIEnv",
+        "SDL_AndroidRequestPermission",
+        "SDL_GetAndroidSDKVersion",
+        "SDL_IsAndroidTV",
+        "SDL_IsChromebook",
+        "SDL_IsDeXMode",
+        "SDL_SetWindowsMessageHook",
+        "SDL_WinRTGetDeviceFamily",
+        "SDL_WinRTRunApp",
+    }
+}
+dynamic_counts = {name: 0 for names in ios_dynamic_imports.values() for name in names}
+
+def keep_unavailable_imports_dynamic(source, fallback_libraries):
+    pattern = re.compile(
+        r'(?P<prefix>\[\s*DllImport\s*\(\s*)'
+        r'(?P<library>"__Internal"|nativeLibName)'
+        r'(?P<arguments>[^\]]*\])'
+        r'(?P<declaration>[^;{}]*?\b(?P<method>[A-Za-z_]\w*)\s*\()',
+        re.S,
+    )
+    matches = list(pattern.finditer(source))
+    for match in reversed(matches):
+        method = match.group("method")
+        fallback = fallback_libraries.get(method)
+        if fallback is not None:
+            start, end = match.span("library")
+            source = source[:start] + f'"{fallback}"' + source[end:]
+            dynamic_counts[method] += 1
+    return source
 
 for path in root.rglob("*.cs"):
     source = path.read_text()
@@ -314,6 +351,14 @@ for path in root.rglob("*.cs"):
         updated, const_count = const_pattern.subn(r'\1"__Internal"', updated)
         updated, import_count = import_pattern.subn(r'\1"__Internal"', updated)
         counts[library] += const_count + import_count
+    updated = keep_unavailable_imports_dynamic(
+        updated,
+        {
+            name: library
+            for library, names in ios_dynamic_imports.items()
+            for name in names
+        },
+    )
     if updated != source:
         path.write_text(updated)
 
@@ -321,6 +366,10 @@ missing = [library for library, count in counts.items() if count == 0]
 if missing:
     raise SystemExit("Could not patch FNA native imports: " + ", ".join(missing))
 print("Patched FNA native imports: " + ", ".join(f"{name}={count}" for name, count in counts.items()))
+missing_dynamic = [name for name, count in dynamic_counts.items() if count == 0]
+if missing_dynamic:
+    raise SystemExit("Could not preserve unavailable SDL imports dynamically: " + ", ".join(missing_dynamic))
+print("Kept platform-specific SDL imports dynamic: " + ", ".join(f"{name}={count}" for name, count in dynamic_counts.items()))
 PY
 
 cd "$script_dir" || cd_fail
@@ -373,6 +422,26 @@ import sys
 root = pathlib.Path(sys.argv[1])
 fmod_libraries = ("libfmodstudio", "libfmod", "fmodstudio", "fmod")
 fmod_counts = {library: 0 for library in fmod_libraries}
+fmod_dynamic_counts = {"FMOD_DSP_GetCPUUsage": 0}
+
+def keep_unavailable_imports_dynamic(source, fallback_libraries):
+    pattern = re.compile(
+        r'(?P<prefix>\[\s*DllImport\s*\(\s*)'
+        r'(?P<library>"__Internal"|nativeLibName)'
+        r'(?P<arguments>[^\]]*\])'
+        r'(?P<declaration>[^;{}]*?\b(?P<method>[A-Za-z_]\w*)\s*\()',
+        re.S,
+    )
+    matches = list(pattern.finditer(source))
+    for match in reversed(matches):
+        method = match.group("method")
+        fallback = fallback_libraries.get(method)
+        if fallback is not None:
+            start, end = match.span("library")
+            source = source[:start] + f'"{fallback}"' + source[end:]
+            fmod_dynamic_counts[method] += 1
+    return source
+
 for path in root.rglob("*.cs"):
     source = path.read_text()
     updated = source.replace("Assembly.GetEntryAssembly()", "Assembly.GetExecutingAssembly()")
@@ -382,12 +451,16 @@ for path in root.rglob("*.cs"):
         )
         updated, count = pattern.subn(r'\1"__Internal"', updated)
         fmod_counts[library] += count
+    updated = keep_unavailable_imports_dynamic(updated, {"FMOD_DSP_GetCPUUsage": "fmod"})
     if updated != source:
         path.write_text(updated)
 
 if sum(fmod_counts.values()) == 0:
     raise SystemExit("Could not find any FMOD DllImport declarations to link statically")
 print("Patched FMOD native imports: " + ", ".join(f"{name}={count}" for name, count in fmod_counts.items()))
+if fmod_dynamic_counts["FMOD_DSP_GetCPUUsage"] == 0:
+    raise SystemExit("Could not preserve the unavailable FMOD_DSP_GetCPUUsage import dynamically")
+print("Kept unavailable FMOD import dynamic: FMOD_DSP_GetCPUUsage")
 
 settings = root / "Celeste" / "Settings.cs"
 source = settings.read_text()
