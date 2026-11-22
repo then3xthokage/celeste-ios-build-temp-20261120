@@ -194,17 +194,28 @@ jobs:
             echo 'The .NET 9 SDK required by the iOS hook smoke dependencies is missing.' >&2
             exit 1
           fi
-          printf '{"sdk":{"version":"%s","rollForward":"latestPatch"}}\n' "$sdk9_version" > "$RUNNER_TEMP/global.json"
+          sdk8_version="$(dotnet --list-sdks | awk '$1 == "8.0.428" { print $1 }')"
+          if [ -z "$sdk8_version" ]; then
+            echo 'The .NET 8.0.428 SDK required by the iOS app build is missing.' >&2
+            exit 1
+          fi
           dotnet_path="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$(command -v dotnet)")"
           dotnet_root="$(dirname "$dotnet_path")"
           echo "DOTNET_ROOT=$dotnet_root" >> "$GITHUB_ENV"
           echo "DOTNET_ROOT_ARM64=$dotnet_root" >> "$GITHUB_ENV"
           export DOTNET_ROOT="$dotnet_root"
           export DOTNET_ROOT_ARM64="$dotnet_root"
-          dotnet --version
-          if ! dotnet workload list | grep -Eq '(^|[[:space:]])ios([[:space:]]|$)'; then
-            dotnet workload install ios --skip-manifest-update
-          fi
+          for sdk_version in "$sdk9_version" "$sdk8_version"; do
+            printf '{"sdk":{"version":"%s","rollForward":"latestPatch"}}\n' "$sdk_version" > "$RUNNER_TEMP/global.json"
+            echo "Checking iOS workload for .NET SDK $sdk_version"
+            dotnet --version
+            if ! dotnet workload list | grep -Eq '(^|[[:space:]])ios([[:space:]]|$)'; then
+              dotnet workload install ios --skip-manifest-update
+            fi
+          done
+          # Later hook smoke steps use .NET 9; the app's repository global.json
+          # selects .NET 8.0.428 when build.sh compiles the iOS app.
+          printf '{"sdk":{"version":"%s","rollForward":"latestPatch"}}\n' "$sdk9_version" > "$RUNNER_TEMP/global.json"
           if ! dotnet --list-runtimes | grep -Eq '^Microsoft.NETCore.App 6\.0\.'; then
             curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
             bash "$RUNNER_TEMP/dotnet-install.sh" --runtime dotnet --version 6.0.36 --architecture arm64 --install-dir "$DOTNET_ROOT"
