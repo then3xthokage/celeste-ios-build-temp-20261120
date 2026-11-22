@@ -1,9 +1,20 @@
 diff --git a/theorafile.c b/theorafile.c
-index c9315c6..eda97a9 100644
+index c9315c6..c822c00 100644
 --- a/theorafile.c
 +++ b/theorafile.c
-@@ -539,7 +539,7 @@ void tf_reset(OggTheora_File *file)
+@@ -497,6 +497,7 @@ int tf_setaudiotrack(OggTheora_File *file, int vtrack)
+ 	if (vtrack >= 0 && vtrack < file->vtracks)
+ 	{
+ 		file->vtrack = vtrack;
++		file->audio_granulepos = 0;
+ 		return 1;
+ 	}
+ 	else
+@@ -537,9 +538,10 @@ void tf_reset(OggTheora_File *file)
+ 	ogg_sync_reset(&file->sync);
+ 	file->io.seek_func(file->datasource, 0, SEEK_SET);
  	file->eos = 0;
++	file->audio_granulepos = 0;
  }
  
 -int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
@@ -11,7 +22,7 @@ index c9315c6..eda97a9 100644
  {
  	int i;
  	char *dst = buffer;
-@@ -551,6 +551,10 @@ int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
+@@ -551,6 +553,10 @@ int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
  	unsigned char *plane;
  	int stride;
  	int retval = 0;
@@ -22,7 +33,7 @@ index c9315c6..eda97a9 100644
  
  	for (i = 0; i < numframes; i += 1)
  	{
-@@ -570,6 +574,10 @@ int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
+@@ -570,6 +576,10 @@ int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
  			&packet,
  			&granulepos
  		);
@@ -33,10 +44,11 @@ index c9315c6..eda97a9 100644
  
  		if (rc == 0) /* New frame! */
  		{
-@@ -638,6 +646,29 @@ int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
+@@ -638,7 +648,30 @@ int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
  	return retval;
  }
  
+-int tf_readaudio(OggTheora_File *file, float *buffer, int samples)
 +int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
 +{
 +	return tf_readvideo2(file, buffer, numframes, NULL);
@@ -60,11 +72,56 @@ index c9315c6..eda97a9 100644
 +	return sizeof(OggTheora_File);
 +}
 +
- int tf_readaudio(OggTheora_File *file, float *buffer, int samples)
++int tf_readaudio2(OggTheora_File *file, float *buffer, int samples, ogg_int64_t *granpos_out)
  {
  	int offset = 0;
+ 	int chan, frame;
+@@ -661,6 +694,10 @@ int tf_readaudio(OggTheora_File *file, float *buffer, int samples)
+ 						&file->vdsp,
+ 						frame
+ 					);
++					if (granpos_out != NULL)
++					{
++						*granpos_out = file->audio_granulepos;
++					}
+ 					return offset;
+ 				}
+ 			}
+@@ -672,12 +709,17 @@ int tf_readaudio(OggTheora_File *file, float *buffer, int samples)
+ 			if (!INTERNAL_getNextPacket(file, &file->vstream[file->vtrack], &packet))
+ 			{
+ 				/* ... unless there's nothing left for us to read. */
++				if (granpos_out != NULL)
++				{
++					*granpos_out = file->audio_granulepos;
++				}
+ 				return offset;
+ 			}
+ 			if (vorbis_synthesis(
+ 				&file->vblock,
+ 				&packet
+ 			) == 0) {
++				file->audio_granulepos = packet.granulepos;
+ 				vorbis_synthesis_blockin(
+ 					&file->vdsp,
+ 					&file->vblock
+@@ -685,5 +727,14 @@ int tf_readaudio(OggTheora_File *file, float *buffer, int samples)
+ 			}
+ 		}
+ 	}
++	if (granpos_out != NULL)
++	{
++		*granpos_out = file->audio_granulepos;
++	}
+ 	return offset;
+ }
++
++int tf_readaudio(OggTheora_File *file, float *buffer, int samples)
++{
++	return tf_readaudio2(file, buffer, samples, NULL);
++}
 diff --git a/theorafile.h b/theorafile.h
-index 8a7d465..450ae79 100644
+index 8a7d465..8952633 100644
 --- a/theorafile.h
 +++ b/theorafile.h
 @@ -30,6 +30,7 @@
@@ -75,7 +132,16 @@ index 8a7d465..450ae79 100644
  
  #ifdef __cplusplus
  extern "C"
-@@ -135,6 +136,10 @@ DECLSPEC void tf_reset(OggTheora_File *file);
+@@ -90,6 +91,8 @@ typedef struct OggTheora_File
+ 	/* I/O Data */
+ 	tf_callbacks io;
+ 	void *datasource;
++	/* Granule position of the latest packet submitted to the Vorbis decoder. */
++	ogg_int64_t audio_granulepos;
+ } OggTheora_File;
+ 
+ /* Open/Close */
+@@ -135,7 +138,12 @@ DECLSPEC void tf_reset(OggTheora_File *file);
   * Also, `samples` is not measured in frames!
   */
  DECLSPEC int tf_readvideo(OggTheora_File *file, char *buffer, int numframes);
@@ -84,5 +150,7 @@ index 8a7d465..450ae79 100644
 +DECLSPEC void tf_granpos_dec(OggTheora_File *file, ogg_int64_t granpos, double *seconds, ogg_int64_t *frame);
 +DECLSPEC size_t tf_gettheorasize(void);
  DECLSPEC int tf_readaudio(OggTheora_File *file, float *buffer, int samples);
++DECLSPEC int tf_readaudio2(OggTheora_File *file, float *buffer, int samples, ogg_int64_t *granpos);
  
  /* Support for multiple audio tracks in a single file
+  *

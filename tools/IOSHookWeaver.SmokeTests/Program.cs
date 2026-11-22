@@ -33,6 +33,7 @@ internal static class Program
         {
             Mono.Cecil.TypeDefinition imports = definition.MainModule.GetType("VideoNativeImportFixture");
             AssertNativeImport(imports, "ReadVideo2", "tf_readvideo2");
+            AssertNativeImport(imports, "ReadAudio2", "tf_readaudio2");
             AssertNativeImport(imports, "DecodeGranule", "tf_granpos_dec");
             AssertNativeImport(imports, "GetTheoraSize", "tf_gettheorasize");
             AssertColorImport(definition.MainModule.GetType("ColorNativeImportFixture"), "ColorHLSToRGB");

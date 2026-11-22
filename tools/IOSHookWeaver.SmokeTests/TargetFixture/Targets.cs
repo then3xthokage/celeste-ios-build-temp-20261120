@@ -80,6 +80,9 @@ public static unsafe class VideoNativeImportFixture
     [DllImport("theorafilebun", EntryPoint = "tf_readvideo2", CallingConvention = CallingConvention.Cdecl)]
     public static extern int ReadVideo2(IntPtr file, IntPtr buffer, int numFrames, long* granulePosition);
 
+    [DllImport("theorafilebun", EntryPoint = "tf_readaudio2", CallingConvention = CallingConvention.Cdecl)]
+    public static extern int ReadAudio2(IntPtr file, IntPtr buffer, int samples, long* granulePosition);
+
     [DllImport("theorafilebun", EntryPoint = "tf_granpos_dec", CallingConvention = CallingConvention.Cdecl)]
     public static extern void DecodeGranule(IntPtr file, long granulePosition, double* seconds, long* frame);
 
