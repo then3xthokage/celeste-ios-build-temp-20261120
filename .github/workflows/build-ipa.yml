@@ -183,6 +183,15 @@ jobs:
           dotnet --list-runtimes
           xcodebuild -version
 
+      - name: Install Mono strong-name utility when needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v sn >/dev/null 2>&1; then
+            brew install mono
+          fi
+          command -v sn
+
       - name: Identify native library cache version
         id: native-revisions
         shell: bash
