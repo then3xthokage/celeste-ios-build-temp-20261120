@@ -146,7 +146,9 @@ namespace celestemeow
                 .ToList();
             if (roots.Count == 0) return;
 
-            dependencyGraphCache = await ModDependencyResolver.DownloadEverestGraphAsync(GetSmallTextAsync, progress);
+            dependencyGraphCache = await ModDependencyResolver.DownloadEverestGraphAsync(GetSmallTextAsync, progress, DependencyGraphCachePath());
+            if (!dependencyGraphCache.IsAvailable)
+                throw new IOException("Celeste couldn't verify the required mod list. Connect to the internet and try again.");
             installed = LoadInstalledPackages();
             roots = installed.Values
                 .Select(item => item.Package)
@@ -507,7 +509,9 @@ namespace celestemeow
         private static async Task<List<string>> InstallRequiredDependenciesAsync(PackageInfo rootPackage, HashSet<string> enabled, IProgress<string> progress)
         {
             Directory.CreateDirectory(ModsDirectory);
-            dependencyGraphCache = await ModDependencyResolver.DownloadEverestGraphAsync(GetSmallTextAsync, progress);
+            dependencyGraphCache = await ModDependencyResolver.DownloadEverestGraphAsync(GetSmallTextAsync, progress, DependencyGraphCachePath());
+            if (!dependencyGraphCache.IsAvailable)
+                throw new IOException("Celeste couldn't verify the required mod list. Connect to the internet and try again.");
             ApplyDependencyGraph(rootPackage, dependencyGraphCache);
             Dictionary<string, InstalledPackage> installed = LoadInstalledPackages();
             Dictionary<string, UpdateInfo> catalog = HasUnsatisfiedDependencies(rootPackage, rootPackage, installed)
@@ -792,7 +796,8 @@ namespace celestemeow
         {
             if (dependency == null || string.IsNullOrWhiteSpace(dependency.Version)) return true;
             if (string.Equals(dependency.Name, "Everest", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(dependency.Name, "EverestCore", StringComparison.OrdinalIgnoreCase))
+                || string.Equals(dependency.Name, "EverestCore", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(dependency.Name, "API", StringComparison.OrdinalIgnoreCase))
                 return VersionSatisfies(dependency.Version, "1.6696.0");
             if (string.Equals(dependency.Name, "Celeste", StringComparison.OrdinalIgnoreCase))
                 return VersionSatisfies(dependency.Version, "1.4.0.0");
@@ -1000,6 +1005,11 @@ namespace celestemeow
         private static string EnabledPath()
         {
             return Path.Combine(Root, "enabled.txt");
+        }
+
+        private static string DependencyGraphCachePath()
+        {
+            return Path.Combine(Root, "dependency-graph.yaml");
         }
 
         private static HashSet<string> ReadEnabledNames()

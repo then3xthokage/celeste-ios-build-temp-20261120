@@ -56,7 +56,9 @@ the same data-driven path without a mod-specific branch in the app.
 Required packages are downloaded from Everest's update catalog and mirrors,
 verified against its xxHash entries, inspected, and enabled. Optional packages
 stay optional; they enter load order only when already installed and enabled.
-If Everest's graph is offline, the resolver continues from package manifests.
+The last valid graph is saved in the user's mod data folder and reused offline.
+If neither the live graph nor a valid saved graph is available, the manager
+stops before game launch instead of silently ignoring graph-only requirements.
 
 ## Hook behavior
 
@@ -119,7 +121,11 @@ Verification record (November 22, 2026):
   4, 12, 51, 80, 74, and 9 downloadable packages respectively. Every current
   catalog version met the declared minimum under Everest's version rule.
   Case-insensitive lookup, duplicate constraint merging, optional dependency
-  handling, and cycle reporting passed.
+  handling, cycle reporting, offline graph-cache fallback, and empty-graph
+  rejection passed. Eight graph-required dependency edges across 104 inspected
+  package archives were absent from their root manifests, so the graph is
+  required for complete dependency resolution. The `API` dependency alias is
+  checked against the bundled Everest core version.
 - Current catalogs and manifests were checked for 100 unique packages across
   the two Secret Santa packs and Crossover. The package audit checked catalog
   size, xxHash, and a root Everest manifest for each package.

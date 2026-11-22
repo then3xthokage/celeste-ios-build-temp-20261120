@@ -205,9 +205,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: fnalibs-ios-builder-celeste/release/ios/device
-          key: celeste-ios-native-controller-only-v1-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-${{ hashFiles('patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}
+          key: celeste-ios-native-controller-only-v2-fna-24.01-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-${{ hashFiles('build.sh', 'patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}
           restore-keys: |
-            celeste-ios-native-controller-only-v1-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-
+            celeste-ios-native-controller-only-v2-fna-24.01-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-
 
       - name: Check cached native libraries
         id: native-libraries
@@ -257,7 +257,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: fnalibs-ios-builder-celeste/release/ios/device
-          key: celeste-ios-native-controller-only-v1-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-${{ hashFiles('patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}
+          key: celeste-ios-native-controller-only-v2-fna-24.01-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-${{ hashFiles('build.sh', 'patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}
 
       - name: Store IPA in private release
         shell: bash

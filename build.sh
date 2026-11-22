@@ -680,6 +680,40 @@ if [ "${USE_CACHED_NATIVE_LIBS:-0}" = "1" ]; then
 	remove_duplicate_vorbis_objects
 else
 	if ! ./updatelibs.sh; then nativelib_build_err; fi
+	# The user's Celeste build ships FNA 24.1.0. Its native libraries must match
+	# FNA 24.01 rather than the older revisions used by the upstream builder fork.
+	pin_native_source() {
+		local relative_path="$1"
+		local revision="$2"
+		local repo="$script_dir/fnalibs-ios-builder-celeste/$relative_path"
+		if ! git -C "$repo" fetch --no-tags origin "$revision"; then
+			error "failed to fetch compatible native source $relative_path@$revision"
+			return 1
+		fi
+		if ! git -C "$repo" reset --hard; then
+			error "failed to clear old native source patches in $relative_path"
+			return 1
+		fi
+		if ! git -C "$repo" checkout --detach "$revision"; then
+			error "failed to select compatible native source $relative_path@$revision"
+			return 1
+		fi
+	}
+	if ! pin_native_source SDL2 859844eae358447be8d66e6da59b6fb3df0ed778 || \
+	   ! pin_native_source FNA3D 2a6f8586c8d032da18f707eb340bfbef26d1ff8b || \
+	   ! pin_native_source FAudio b2bf5b385bb0719f6afc12fd3636be14280f4fbb || \
+	   ! pin_native_source Theorafile 48d74afcbf838fe95ca56cec142efae07bb56f65; then
+		error "failed to align native libraries with FNA 24.01"
+		exit 1
+	fi
+	if ! git -C "$script_dir/fnalibs-ios-builder-celeste/FNA3D" submodule sync --recursive || \
+	   ! git -C "$script_dir/fnalibs-ios-builder-celeste/FNA3D" submodule update --init --recursive; then
+		error "failed to align FNA3D's pinned shader and Vulkan dependencies"
+		exit 1
+	fi
+	cd "$script_dir/fnalibs-ios-builder-celeste/FNA3D" || cd_fail
+	apply_patch "$script_dir/patches/FNA-FNA3D-renderer.patch"
+	cd "$script_dir/fnalibs-ios-builder-celeste" || cd_fail
 	if [ "${ENABLE_VIRTUAL_CONTROLLER:-0}" = "1" ]; then
 		info "enabling optional iOS virtual controller"
 		cd "$script_dir/fnalibs-ios-builder-celeste/SDL2" || cd_fail

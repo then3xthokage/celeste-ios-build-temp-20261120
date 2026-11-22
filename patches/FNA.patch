@@ -2,7 +2,7 @@ diff --git a/app.config b/app.config
 index 051087d..8bf43ad 100644
 --- a/app.config
 +++ b/app.config
-@@ -1,14 +1,8 @@
+@@ -1,14 +1,7 @@
  <?xml version="1.0" encoding="utf-8"?>
  <configuration>
 -	<dllmap dll="SDL2" os="windows" target="SDL2.dll"/>
@@ -18,7 +18,6 @@ index 051087d..8bf43ad 100644
 -	<dllmap dll="FAudio" os="linux,freebsd,netbsd" target="libFAudio.so.0"/>
 -</configuration>
 +	<!-- Remove these when not targeting iOS/tvOS!!! -->
-+	<dllmap dll="SDL2"          os="osx" target="__Internal"/>
 +	<dllmap dll="FNA3D"         os="osx" target="__Internal"/>
 +	<dllmap dll="FAudio"        os="osx" target="__Internal"/>
 +	<dllmap dll="libtheorafile" os="osx" target="__Internal"/>

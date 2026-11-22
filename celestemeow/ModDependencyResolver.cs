@@ -44,7 +44,10 @@ namespace celestemeow
             IsAvailable = isAvailable;
         }
 
-        public static async Task<ModDependencyResolver> DownloadEverestGraphAsync(Func<string, Task<string>> getSmallText, IProgress<string> progress)
+        public static async Task<ModDependencyResolver> DownloadEverestGraphAsync(
+            Func<string, Task<string>> getSmallText,
+            IProgress<string> progress,
+            string cachePath = null)
         {
             if (getSmallText == null) throw new ArgumentNullException(nameof(getSmallText));
             progress?.Report("Checking Everest's dependency list...");
@@ -63,25 +66,57 @@ namespace celestemeow
 
             try
             {
-                return Parse(await getSmallText(databaseUrl));
+                return ParseAndCache(await getSmallText(databaseUrl), cachePath);
             }
             catch when (!string.Equals(databaseUrl, MirrorUrl, StringComparison.OrdinalIgnoreCase))
             {
                 try
                 {
-                    return Parse(await getSmallText(MirrorUrl));
+                    return ParseAndCache(await getSmallText(MirrorUrl), cachePath);
                 }
                 catch
                 {
-                    progress?.Report("Everest's dependency list is unavailable; using each mod's own metadata.");
-                    return Empty;
                 }
             }
             catch
             {
-                progress?.Report("Everest's dependency list is unavailable; using each mod's own metadata.");
-                return Empty;
             }
+
+            if (!string.IsNullOrWhiteSpace(cachePath) && File.Exists(cachePath))
+            {
+                try
+                {
+                    ModDependencyResolver cached = Parse(File.ReadAllText(cachePath));
+                    progress?.Report("Using the saved Everest dependency list while offline.");
+                    return cached;
+                }
+                catch
+                {
+                    try { File.Delete(cachePath); } catch { }
+                }
+            }
+
+            progress?.Report("Everest's dependency list is unavailable and no saved copy could be loaded.");
+            return Empty;
+        }
+
+        private static ModDependencyResolver ParseAndCache(string yaml, string cachePath)
+        {
+            ModDependencyResolver resolver = Parse(yaml);
+            if (string.IsNullOrWhiteSpace(cachePath)) return resolver;
+            string temporaryPath = cachePath + ".tmp";
+            try
+            {
+                string directory = Path.GetDirectoryName(cachePath);
+                if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+                File.WriteAllText(temporaryPath, yaml);
+                File.Move(temporaryPath, cachePath, true);
+            }
+            catch
+            {
+                try { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); } catch { }
+            }
+            return resolver;
         }
 
         internal static ModDependencyResolver Parse(string yaml)
@@ -109,6 +144,8 @@ namespace celestemeow
                         Merge(existing.OptionalDependencies, entry.OptionalDependencies);
                     }
                 }
+                if (normalized.Count == 0)
+                    throw new InvalidDataException("Everest's dependency graph contains no mod entries.");
                 return new ModDependencyResolver(normalized, true);
             }
             catch (Exception exception)
