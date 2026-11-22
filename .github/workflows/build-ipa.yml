@@ -321,6 +321,7 @@ jobs:
           key: celeste-ios-native-controller-only-v2-fna-24.01-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-${{ hashFiles('build.sh', 'patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'patches/fnalibs-ios-disable-opengl.patch', 'patches/Theorafile-VidPlayer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}
 
       - name: Store IPA in private release
+        if: vars.CELESTE_MOD_COMPATIBILITY_VERIFIED == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
@@ -340,6 +341,7 @@ jobs:
             --clobber
 
       - name: Preserve matching iOS crash symbols
+        if: vars.CELESTE_MOD_COMPATIBILITY_VERIFIED == 'true'
         continue-on-error: true
         shell: bash
         env:
