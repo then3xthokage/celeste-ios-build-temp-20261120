@@ -250,6 +250,20 @@ public static class IOSHookWeaver
         }))
         using (MemoryStream output = new MemoryStream())
         {
+            // MonoMod.Utils supplies MonoMod's Cecil-backed DynamicMethodDefinition
+            // code generator. Its methods are created and loaded while Everest is
+            // initializing the hook backend, so routing its own type initializers
+            // through the not-yet-ready dispatcher can fail before the game starts.
+            // Keep this runtime infrastructure pristine; game, Everest, and mod
+            // assemblies still receive the full hook gates below.
+            if (IsHookBackendInfrastructure(assembly.Name.Name))
+            {
+                assemblyName = assembly.Name.Name;
+                woven = 0;
+                skippedMethods = Array.Empty<string>();
+                return input;
+            }
+
             PatchIOSNativeImports(assembly.MainModule, assembly.Name.Name);
             if (string.Equals(assembly.Name.Name, "TextCopy", StringComparison.OrdinalIgnoreCase))
                 PatchTextCopyClipboard(assembly.MainModule);
@@ -533,6 +547,10 @@ public static class IOSHookWeaver
     {
         if (IsBackendGeneratedMethod(method))
             return "generated iOS hook backend method remains direct";
+        if (method.DeclaringType.Name == "<Module>" && method.IsConstructor && method.IsStatic)
+            return "module initializer must run before the iOS hook dispatcher is initialized";
+        if (method.CustomAttributes.Any(attribute => attribute.AttributeType.FullName == "System.Runtime.CompilerServices.ModuleInitializerAttribute"))
+            return "module initializer entry point must run before the iOS hook dispatcher is initialized";
         // MonoMod's portable DMD backend calls these methods through a closed
         // generic self type. Keeping this tiny dispatch trampoline unmodified
         // avoids an AOT generic handle edge case while preserving the original
@@ -549,6 +567,12 @@ public static class IOSHookWeaver
         if (requiresTypedDispatch && !CanUseTypedDispatch(method))
             return "signature requires a typed adapter but contains open generic parameters";
         return null;
+    }
+
+    private static bool IsHookBackendInfrastructure(string assemblyName)
+    {
+        return assemblyName.StartsWith("Mono.Cecil", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(assemblyName, "MonoMod.Utils", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsBackendGeneratedMethod(MethodDefinition method)

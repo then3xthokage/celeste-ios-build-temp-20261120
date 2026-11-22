@@ -27,8 +27,10 @@ internal static class Program
         int wovenCount;
         string[] skipped;
         byte[] woven = IOSHookWeaver.WeaveAssembly(source, out assemblyName, out wovenCount, out skipped, fixtureOutput);
-        if (skipped.Length != 0)
-            throw new InvalidOperationException("The typed-hook fixtures contain unhookable methods: " + string.Join(" | ", skipped));
+        if (skipped.Length != 2 ||
+            !skipped.Any(item => item.Contains("<Module>::.cctor", StringComparison.Ordinal)) ||
+            !skipped.Any(item => item.Contains("ModuleInitializerProbe::Initialize", StringComparison.Ordinal)))
+            throw new InvalidOperationException("Only the module initializer entry points should remain direct: " + string.Join(" | ", skipped));
         using (Mono.Cecil.AssemblyDefinition definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(new MemoryStream(woven)))
         {
             Mono.Cecil.TypeDefinition imports = definition.MainModule.GetType("VideoNativeImportFixture");
@@ -41,11 +43,14 @@ internal static class Program
         int rewovenCount;
         string[] reweaveSkipped;
         IOSHookWeaver.WeaveAssembly(woven, out assemblyName, out rewovenCount, out reweaveSkipped, fixtureOutput);
-        if (rewovenCount != 0 || reweaveSkipped.Length != 0)
+        if (rewovenCount != 0 || !skipped.SequenceEqual(reweaveSkipped))
             throw new InvalidOperationException("Reweaving an already woven assembly was not idempotent.");
 
         AssemblyLoadContext modContext = new FixtureLoadContext();
         Assembly targetAssembly = modContext.LoadFromStream(new MemoryStream(woven));
+        System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(targetAssembly.ManifestModule.ModuleHandle);
+        AssertEqual("module initializer runs before dispatcher startup", "73",
+            ReadStatic<int>(targetAssembly.GetType("ModuleInitializerProbe", true), "Value").ToString());
         AssemblyLoadContext hookContext = new HookLoadContext(targetAssembly);
         Assembly hookAssembly = hookContext.LoadFromAssemblyPath(hookPath);
         Assembly dependencyAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(dependencyPath);
@@ -73,6 +78,7 @@ internal static class Program
         }
 
         IOSHookRuntime.Initialize();
+        VerifyMonoModCecilBackend();
         VerifyTextCopyClipboard(projectDirectory, configuration, fixtureOutput);
         VerifyCeilingUltraFastFieldGetter(projectDirectory, configuration, fixtureOutput);
         VerifyChroniaExternalLinks(projectDirectory, configuration, fixtureOutput);
@@ -257,6 +263,28 @@ internal static class Program
 
         Console.WriteLine("Typed hook smoke passed: woven=" + wovenCount + "; patched Everest On/IL integration and removal; native decoder imports; hookable Windows HLS import shim; app-bundle and in-memory mod dependency resolution; ref-return, exact ref-readonly modifiers, in/ref, Span, pointer and function-pointer signatures; value-type instance detours and constructors; branchy and generic constructor chains; static constructors; generic type/method combinations; reflected callbacks; and cross-load-context dispatch.");
         return 0;
+    }
+
+    private static void VerifyMonoModCecilBackend()
+    {
+        string monoModUtilsPath = typeof(MonoMod.Utils.DynamicMethodDefinition).Assembly.Location;
+        byte[] original = File.ReadAllBytes(monoModUtilsPath);
+        byte[] woven = IOSHookWeaver.WeaveAssembly(original, out string assemblyName, out int wovenCount,
+            out string[] skipped, Path.GetDirectoryName(monoModUtilsPath));
+        if (assemblyName != "MonoMod.Utils" || wovenCount != 0 || skipped.Length != 0 || !original.SequenceEqual(woven))
+            throw new InvalidOperationException("MonoMod.Utils hook-backend infrastructure must stay byte-for-byte unchanged.");
+
+        MonoMod.Switches.SetSwitchValue("DMDType", "cecil");
+        using MonoMod.Utils.DynamicMethodDefinition dmd = new MonoMod.Utils.DynamicMethodDefinition(
+            "ios_dmd_smoke", typeof(int), Type.EmptyTypes);
+        dmd.GetILGenerator().Emit(System.Reflection.Emit.OpCodes.Ldc_I4, 42);
+        dmd.GetILGenerator().Emit(System.Reflection.Emit.OpCodes.Ret);
+        MethodInfo generated = dmd.Generate();
+        object answer = generated.Invoke(null, null);
+        if (!(answer is int value) || value != 42)
+            throw new InvalidOperationException("MonoMod's Cecil DynamicMethodDefinition backend returned an unexpected value.");
+
+        Console.WriteLine("MonoMod Cecil backend smoke passed: runtime infrastructure preserved and generated method executed.");
     }
 
     private static Assembly LoadEverestRuntimeAssembly(string projectDirectory, string fixtureOutput, string gameAssemblyPath)

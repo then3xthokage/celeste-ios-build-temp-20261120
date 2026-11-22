@@ -1,5 +1,14 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
+
+public static class ModuleInitializerProbe
+{
+    public static int Value;
+
+    [ModuleInitializer]
+    public static void Initialize() => Value = 73;
+}
 
 public sealed unsafe class TestTarget
 {
