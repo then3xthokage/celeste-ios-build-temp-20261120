@@ -28,6 +28,7 @@ public static class ProbeTarget
 public static class ProbeGenericTypeTarget<T>
 {
     public static string GenericTypeConstant() => "original-open-type";
+    public static string GenericMethodConstant<U>() => "original-open-method-on-type";
 }
 
 public static class ProbeGenericMethodTarget

@@ -536,7 +536,8 @@ namespace celestemeow
                     }
                     try
                     {
-                        if (IOSHookIdentity.GetDefinition(cachedTarget).Equals(target))
+                        if (IOSHookIdentity.GetMethodDefinitionPreservingDeclaringType(cachedTarget).Equals(target) ||
+                            IOSHookIdentity.GetDefinition(cachedTarget).Equals(target))
                             TypedDispatchCache.Remove(cachedTarget);
                     }
                     catch { }
@@ -554,18 +555,16 @@ namespace celestemeow
             {
                 if (!ModifiedBodies.TryGetValue(target, out body))
                 {
-                    MethodBase openGenericTarget = GetOpenGenericDefinition(target);
-                    if (openGenericTarget == null || !ModifiedBodies.TryGetValue(openGenericTarget, out body))
-                        return null;
+                    MethodBase sameDeclaringTypeDefinition = IOSHookIdentity.GetMethodDefinitionPreservingDeclaringType(target);
+                    if (sameDeclaringTypeDefinition.Equals(target) || !ModifiedBodies.TryGetValue(sameDeclaringTypeDefinition, out body))
+                    {
+                        MethodBase openGenericTarget = IOSHookIdentity.GetDefinition(target);
+                        if (openGenericTarget.Equals(target) || !ModifiedBodies.TryGetValue(openGenericTarget, out body))
+                            return null;
+                    }
                 }
             }
             return CloseModifiedBodyForTarget(body, target);
-        }
-
-        private static MethodBase GetOpenGenericDefinition(MethodBase target)
-        {
-            MethodBase definition = IOSHookIdentity.GetDefinition(target);
-            return definition.Equals(target) ? null : definition;
         }
 
         private static MethodInfo CloseModifiedBodyForTarget(MethodInfo body, MethodBase target)

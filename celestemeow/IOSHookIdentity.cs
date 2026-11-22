@@ -69,6 +69,14 @@ namespace celestemeow
             return method;
         }
 
+        internal static MethodBase GetMethodDefinitionPreservingDeclaringType(MethodBase method)
+        {
+            MethodInfo methodInfo = method as MethodInfo;
+            return methodInfo != null && methodInfo.IsGenericMethod && !methodInfo.IsGenericMethodDefinition
+                ? methodInfo.GetGenericMethodDefinition()
+                : method;
+        }
+
         private static string ReturnType(MethodBase method)
         {
             return method is MethodInfo info ? SignatureTypeName(info.ReturnParameter) : "System.Void";

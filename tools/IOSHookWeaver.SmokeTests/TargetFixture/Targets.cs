@@ -192,6 +192,7 @@ public class GenericILTypeTarget<T>
 {
     public static string GetTypeValue() => "original-type";
     public string GetInstanceValue() => "original-instance";
+    public string GetGenericInstanceValue<U>() => "original-generic-instance";
 }
 
 public static class GenericILMethodTarget

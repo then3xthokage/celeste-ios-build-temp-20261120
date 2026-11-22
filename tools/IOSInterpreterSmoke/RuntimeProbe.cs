@@ -79,6 +79,18 @@ internal static class RuntimeProbe
         IOSILHookRuntime.Remove(genericTypeMethodDefinition, editGenericType);
         AssertEqual("Open generic type IL hook removal on iOS interpreter", "original-open-type", genericTypeMethod.Invoke(null, null)?.ToString());
 
+        MethodInfo genericTypeMethodOnClosedType = genericType.GetMethod("GenericMethodConstant", BindingFlags.Public | BindingFlags.Static)
+            .GetGenericMethodDefinition();
+        MethodInfo genericTypeMethodClosed = genericTypeMethodOnClosedType.MakeGenericMethod(typeof(string));
+        ILContext.Manipulator editGenericMethodOnType = context => ReplaceString(
+            context, "original-open-method-on-type", "patched-open-method-on-type");
+        IOSILHookRuntime.Add(genericTypeMethodOnClosedType, editGenericMethodOnType, null);
+        AssertEqual("Open generic method on a closed type IL sidecar on iOS interpreter", "patched-open-method-on-type",
+            genericTypeMethodClosed.Invoke(null, null)?.ToString());
+        IOSILHookRuntime.Remove(genericTypeMethodOnClosedType, editGenericMethodOnType);
+        AssertEqual("Open generic method on a closed type hook removal on iOS interpreter", "original-open-method-on-type",
+            genericTypeMethodClosed.Invoke(null, null)?.ToString());
+
         Type genericTargetType = fixture.GetType("ProbeGenericMethodTarget", throwOnError: true);
         MethodInfo genericDefinition = genericTargetType.GetMethod("GenericConstant", BindingFlags.Public | BindingFlags.Static);
         MethodInfo genericClosed = genericDefinition.MakeGenericMethod(typeof(int));

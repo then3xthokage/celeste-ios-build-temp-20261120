@@ -122,17 +122,13 @@ namespace celestemeow
             {
                 Registration[] registrations;
                 if (Hooks.TryGetValue(target, out registrations)) return registrations.Length;
-                MethodBase openGenericTarget = GetOpenGenericDefinition(target);
-                return openGenericTarget != null && Hooks.TryGetValue(openGenericTarget, out registrations)
-                    ? registrations.Length
-                    : 0;
+                MethodBase sameDeclaringTypeDefinition = IOSHookIdentity.GetMethodDefinitionPreservingDeclaringType(target);
+                if (!sameDeclaringTypeDefinition.Equals(target) && Hooks.TryGetValue(sameDeclaringTypeDefinition, out registrations))
+                    return registrations.Length;
+                MethodBase openGenericTarget = IOSHookIdentity.GetDefinition(target);
+                return !openGenericTarget.Equals(target) && Hooks.TryGetValue(openGenericTarget, out registrations)
+                    ? registrations.Length : 0;
             }
-        }
-
-        private static MethodBase GetOpenGenericDefinition(MethodBase target)
-        {
-            MethodBase definition = IOSHookIdentity.GetDefinition(target);
-            return definition.Equals(target) ? null : definition;
         }
 
         private static Registration MakeRegistration(MethodBase target, Delegate manipulator, object config)
