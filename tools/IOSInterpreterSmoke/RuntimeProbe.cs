@@ -14,7 +14,7 @@ using OpCodes = System.Reflection.Emit.OpCodes;
 
 namespace IOSInterpreterSmoke;
 
-internal static class RuntimeProbe
+public static class RuntimeProbe
 {
     public static Action<string> Progress { get; set; }
     private static int moduleInitializerHookCalls;
