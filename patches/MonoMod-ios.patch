@@ -2,19 +2,10 @@ diff --git a/src/MonoMod.Utils/DMDGenerators/DMDCecilGenerator.cs b/src/MonoMod.
 index 2223d163..9a7bf0e8 100644
 --- a/src/MonoMod.Utils/DMDGenerators/DMDCecilGenerator.cs
 +++ b/src/MonoMod.Utils/DMDGenerators/DMDCecilGenerator.cs
-@@ -175,6 +175,8 @@ namespace MonoMod.Utils
-                     clone.Parameters.Insert(0, new ParameterDefinition("<>_this", Mono.Cecil.ParameterAttributes.None, type.Relink(relinker, clone)));
-                 }
- 
+@@ -177,0 +178,2 @@ namespace MonoMod.Utils
 +                NormalizeRuntimeCoreLibraryReferences(module);
 +
-                 var envDmdDump = Switches.TryGetSwitchValue(Switches.DMDDumpTo, out var dumpToVal) ? dumpToVal as string : null;
-                 if (!string.IsNullOrEmpty(envDmdDump))
-                 {
-@@ -205,5 +207,26 @@ namespace MonoMod.Utils
-             }
-         }
- 
+@@ -207,0 +210,21 @@ namespace MonoMod.Utils
 +        private static void NormalizeRuntimeCoreLibraryReferences(ModuleDefinition module)
 +        {
 +            if (!ReflectionHelper.IsCoreBCL)
@@ -36,5 +27,3 @@ index 2223d163..9a7bf0e8 100644
 +            }
 +        }
 +
-     }
- }
