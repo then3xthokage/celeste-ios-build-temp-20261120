@@ -25,6 +25,6 @@
     <Compile Include="../../celestemeow/IOSHookIdentity.cs" Link="IOSHookIdentity.cs" />
     <Compile Include="../../celestemeow/IOSHookRuntime.cs" Link="IOSHookRuntime.cs" />
     <Compile Include="../../celestemeow/IOSILHookRuntime.cs" Link="IOSILHookRuntime.cs" />
-    <BundleResource Include="ProbeFixture/bin/$(Configuration)/net8.0/ProbeFixture.dll" TargetPath="ProbeFixture.dll" />
+    <EmbeddedResource Include="ProbeFixture/bin/$(Configuration)/net8.0/ProbeFixture.dll" LogicalName="ProbeFixture.dll" />
   </ItemGroup>
 </Project>

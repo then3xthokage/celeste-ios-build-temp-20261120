@@ -17,8 +17,12 @@ internal static class RuntimeProbe
         IOSHookRuntime.Initialize();
         VerifyCecilGeneratedMethod();
 
-        string fixturePath = Path.Combine(AppContext.BaseDirectory, "ProbeFixture.dll");
-        byte[] original = File.ReadAllBytes(fixturePath);
+        using Stream fixtureResource = Assembly.GetExecutingAssembly().GetManifestResourceStream("ProbeFixture.dll");
+        if (fixtureResource == null)
+            throw new FileNotFoundException("The hook fixture was not embedded in the iOS smoke app.");
+        using MemoryStream fixtureImage = new MemoryStream();
+        fixtureResource.CopyTo(fixtureImage);
+        byte[] original = fixtureImage.ToArray();
         byte[] woven = IOSHookWeaver.WeaveAssembly(original, out string assemblyName, out int wovenCount,
             out string[] skipped, AppContext.BaseDirectory);
         if (assemblyName != "ProbeFixture" || wovenCount == 0 || skipped.Length != 2)
