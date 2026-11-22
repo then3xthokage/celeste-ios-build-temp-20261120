@@ -101,5 +101,21 @@
     <LinkerArgument Include="_tf_readaudio2" />
     <LinkerArgument Include="-exported_symbol" />
     <LinkerArgument Include="_tf_readvideo2" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_FNA3D_GenVertexBuffer" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_FNA3D_SetVertexBufferData" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_FNA3D_AddDisposeVertexBuffer" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_FNA3D_GenIndexBuffer" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_FNA3D_SetIndexBufferData" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_FNA3D_AddDisposeIndexBuffer" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_FNA3D_ApplyVertexBufferBindings" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_FNA3D_DrawIndexedPrimitives" />
   </ItemGroup>
 </Project>

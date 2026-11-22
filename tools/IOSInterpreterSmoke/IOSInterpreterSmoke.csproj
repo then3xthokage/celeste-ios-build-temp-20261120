@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-ios</TargetFramework>
+    <RuntimeIdentifier>iossimulator-arm64</RuntimeIdentifier>
+    <OutputType>Exe</OutputType>
+    <ApplicationTitle>iOS Hook Runtime Smoke</ApplicationTitle>
+    <ApplicationId>gay.rooot.celestemeow.smoke</ApplicationId>
+    <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
+    <EnableCodeSigning>false</EnableCodeSigning>
+    <MtouchLink>SdkOnly</MtouchLink>
+    <UseInterpreter>true</UseInterpreter>
+    <DefineConstants>$(DefineConstants);__IOS__</DefineConstants>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+    <PackageReference Include="KeraLua" Version="1.4.7" ExcludeAssets="native;build;buildTransitive" />
+    <ProjectReference Include="../../Everest/external/MonoMod/src/MonoMod.Utils/MonoMod.Utils.csproj" />
+    <ProjectReference Include="../../Everest/external/NLua/build/net8.0/NLua.net8.0.csproj" />
+    <ProjectReference Include="ProbeFixture/ProbeFixture.csproj" ReferenceOutputAssembly="false" />
+    <Compile Include="AppDelegate.cs" />
+    <Compile Include="Program.cs" />
+    <Compile Include="RuntimeProbe.cs" />
+    <Compile Include="../../tools/IOSHookWeaver/Program.cs" Link="IOSHookWeaver.cs" />
+    <Compile Include="../../celestemeow/IOSHookIdentity.cs" Link="IOSHookIdentity.cs" />
+    <Compile Include="../../celestemeow/IOSHookRuntime.cs" Link="IOSHookRuntime.cs" />
+    <Compile Include="../../celestemeow/IOSILHookRuntime.cs" Link="IOSILHookRuntime.cs" />
+    <BundleResource Include="ProbeFixture/bin/$(Configuration)/net8.0/ProbeFixture.dll" TargetPath="ProbeFixture.dll" />
+  </ItemGroup>
+</Project>

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that the final iOS Mach-O exports the decoder imports used by mods."""
+"""Verify that the final iOS Mach-O exports native entry points used by mods."""
 
 import argparse
 import plistlib
@@ -14,6 +14,14 @@ REQUIRED_SYMBOLS = (
     "_tf_granpos_dec",
     "_tf_readaudio2",
     "_tf_readvideo2",
+    "_FNA3D_GenVertexBuffer",
+    "_FNA3D_SetVertexBufferData",
+    "_FNA3D_AddDisposeVertexBuffer",
+    "_FNA3D_GenIndexBuffer",
+    "_FNA3D_SetIndexBufferData",
+    "_FNA3D_AddDisposeIndexBuffer",
+    "_FNA3D_ApplyVertexBufferBindings",
+    "_FNA3D_DrawIndexedPrimitives",
 )
 
 
@@ -130,7 +138,7 @@ def main():
     if missing:
         print("iOS executable is missing mod-required exports: " + ", ".join(missing), file=sys.stderr)
         return 1
-    print("iOS executable exports all %d VidPlayer decoder entry points." % len(REQUIRED_SYMBOLS))
+    print("iOS executable exports all %d required VidPlayer and mod-native entry points." % len(REQUIRED_SYMBOLS))
     return 0
 
 

@@ -179,7 +179,7 @@ jobs:
           path: |
             ~/.nuget/packages
             ~/.dotnet/tools
-          key: celeste-dotnet-${{ runner.os }}-${{ steps.input-paths.outputs.game_hash }}-${{ hashFiles('celestemeow/*.csproj', 'celestemeow.sln', 'global.json', 'celestemeow/IOSHook*.cs', 'celestemeow/IOSILHookRuntime.cs', 'tools/IOSHookWeaver/*.cs', 'tools/IOSHookWeaver.SmokeTests/**/*.cs', 'tools/IOSHookWeaver.SmokeTests/**/*.csproj', 'tools/IOSNativeImportPatcher/*.cs', 'patches/Everest-ios.patch') }}-ilspy-8.0.0.7246-preview3
+          key: celeste-dotnet-${{ runner.os }}-${{ steps.input-paths.outputs.game_hash }}-${{ hashFiles('celestemeow/*.csproj', 'celestemeow.sln', 'global.json', 'celestemeow/IOSHook*.cs', 'celestemeow/IOSILHookRuntime.cs', 'tools/IOSHookWeaver/*.cs', 'tools/IOSHookWeaver.SmokeTests/**/*.cs', 'tools/IOSHookWeaver.SmokeTests/**/*.csproj', 'tools/IOSInterpreterSmoke/**/*.cs', 'tools/IOSInterpreterSmoke/**/*.csproj', 'tools/IOSNativeImportPatcher/*.cs', 'patches/Everest-ios.patch') }}-ilspy-8.0.0.7246-preview3
 
       - name: Install .NET iOS workload when needed
         shell: bash
@@ -201,6 +201,46 @@ jobs:
           fi
           dotnet --list-runtimes
           xcodebuild -version
+
+      - name: Verify woven hooks on the iOS interpreter
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/IOSInterpreterSmoke.csproj"
+          dotnet publish "$smoke_project" --configuration Release -r iossimulator-arm64 -p:EnableCodeSigning=false
+          app_path="$(find "$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/bin/Release/net8.0-ios" -maxdepth 3 -type d -name 'IOSInterpreterSmoke.app' -print -quit)"
+          if [ -z "$app_path" ]; then
+            echo 'The iOS interpreter smoke app bundle was not produced.' >&2
+            exit 1
+          fi
+          device_id="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((x["udid"] for xs in d["devices"].values() for x in xs if x.get("isAvailable") and x["name"].startswith("iPhone")), ""))')"
+          if [ -z "$device_id" ]; then
+            echo 'No available iPhone simulator was found on the runner.' >&2
+            exit 1
+          fi
+          bundle_id='gay.rooot.celestemeow.smoke'
+          xcrun simctl boot "$device_id" 2>/dev/null || true
+          xcrun simctl bootstatus "$device_id" -b
+          xcrun simctl install "$device_id" "$app_path"
+          xcrun simctl launch "$device_id" "$bundle_id"
+          app_data="$(xcrun simctl get_app_container "$device_id" "$bundle_id" data)"
+          result_path="$app_data/Documents/ios-interpreter-smoke.txt"
+          for attempt in $(seq 1 60); do
+            if [ -s "$result_path" ]; then break; fi
+            sleep 1
+          done
+          if [ ! -s "$result_path" ]; then
+            xcrun simctl spawn "$device_id" log show --last 3m --style compact --predicate "process == 'IOSInterpreterSmoke'" || true
+            echo 'The iOS interpreter smoke app did not write a result.' >&2
+            exit 1
+          fi
+          cat "$result_path"
+          if ! grep -qx 'PASS' "$result_path"; then
+            echo 'MonoMod Cecil or the woven On/IL hook path failed on the iOS interpreter.' >&2
+            exit 1
+          fi
+          xcrun simctl terminate "$device_id" "$bundle_id" || true
+          xcrun simctl shutdown "$device_id" || true
 
       - name: Identify native library cache version
         id: native-revisions

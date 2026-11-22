@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 
+#pragma warning disable CA2255
 public static class ModuleInitializerProbe
 {
     public static int Value;
@@ -9,6 +10,7 @@ public static class ModuleInitializerProbe
     [ModuleInitializer]
     public static void Initialize() => Value = 73;
 }
+#pragma warning restore CA2255
 
 public sealed unsafe class TestTarget
 {

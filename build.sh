@@ -765,7 +765,7 @@ if [ -z "$ipa_path" ]; then
 	exit 1
 fi
 if ! python3 "$script_dir/tools/verify-ios-native-exports.py" "$ipa_path"; then
-	error "the packaged iOS app does not export all decoder symbols required by code mods"
+	error "the packaged iOS app does not export every native symbol required by audited code mods"
 	exit 1
 fi
 if ! mv "$ipa_path" "$script_dir/celestemeow.ipa"; then error "failed to move ipa"; exit 1; fi
