@@ -19,21 +19,19 @@ internal sealed class AppDelegate : UIApplicationDelegate
         };
         window.MakeKeyAndVisible();
 
-        string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        Directory.CreateDirectory(documents);
-        string resultPath = Path.Combine(documents, "ios-interpreter-smoke.txt");
-        File.WriteAllText(resultPath, "RUNNING: app delegate entered");
-        RuntimeProbe.Progress = stage => File.WriteAllText(resultPath, "RUNNING: " + stage);
+        string resultPath = Program.ResultPath;
+        Program.WriteProgress("RUNNING: app delegate entered");
+        RuntimeProbe.Progress = stage => Program.WriteProgress("RUNNING: " + stage);
         Task.Run(() =>
         {
             try
             {
                 RuntimeProbe.Run();
-                File.WriteAllText(resultPath, "PASS");
+                Program.WriteProgress("PASS");
             }
             catch (Exception exception)
             {
-                File.WriteAllText(resultPath, "FAIL\n" + exception);
+                Program.WriteProgress("FAIL\n" + exception);
             }
         });
         return true;
