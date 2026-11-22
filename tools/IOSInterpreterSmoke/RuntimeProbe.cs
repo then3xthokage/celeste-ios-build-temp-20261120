@@ -31,11 +31,30 @@ internal static class RuntimeProbe
 
         Assembly fixture = Assembly.Load(woven);
         IOSILHookRuntime.RegisterAssemblySnapshot(fixture, woven);
+
+        int moduleInitializerToken;
+        using (Mono.Cecil.AssemblyDefinition definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(new MemoryStream(woven)))
+        {
+            Mono.Cecil.MethodDefinition initializer = definition.MainModule.GetType("<Module>").Methods
+                .FirstOrDefault(method => method.Name == ".cctor");
+            moduleInitializerToken = initializer?.MetadataToken.ToInt32() ?? 0;
+        }
+        if (moduleInitializerToken == 0)
+            throw new MissingMethodException("The woven fixture did not contain its module initializer.");
+        MethodBase moduleInitializer = fixture.ManifestModule.ResolveMethod(moduleInitializerToken);
+        Type moduleHooksType = fixture.GetType("ProbeModuleInitializerHooks", throwOnError: true);
+        Delegate moduleHook = Delegate.CreateDelegate(
+            fixture.GetType("ProbeModuleInitializerHook", throwOnError: true),
+            moduleHooksType.GetMethod("OnInitialize", BindingFlags.Public | BindingFlags.Static));
+        IOSHookRuntime.AddOn(moduleInitializer, moduleHook);
+
         VerifyNLuaCodeGeneration(fixture);
         RuntimeHelpers.RunModuleConstructor(fixture.ManifestModule.ModuleHandle);
         Type moduleState = fixture.GetType("ProbeModuleInitializer", throwOnError: true);
         if ((int)moduleState.GetField("Value").GetValue(null) != 73)
             throw new InvalidOperationException("The downloaded assembly's module initializer did not run before hook dispatch.");
+        AssertEqual("Global module initializer On hook on iOS interpreter", 1,
+            moduleHooksType.GetField("Calls").GetValue(null));
 
         VerifyEverestStyleConstructor(fixture);
 

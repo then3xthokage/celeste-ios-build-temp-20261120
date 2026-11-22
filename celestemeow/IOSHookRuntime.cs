@@ -584,9 +584,9 @@ namespace celestemeow
 
         private static void SetGateEnabled(MethodBase target, bool enabled)
         {
-            if (target is ConstructorInfo staticConstructor && staticConstructor.IsStatic)
+            if (target is ConstructorInfo staticConstructor && staticConstructor.IsStatic && !IsModuleInitializer(target))
                 return;
-            if (target.DeclaringType == null)
+            if (IsModuleInitializer(target))
             {
                 Type container = target.Module.Assembly.GetType(IOSHookIdentity.ModuleOriginalContainerName(target), false, false);
                 FieldInfo moduleGate = container?.GetField(IOSHookIdentity.GateFieldName(target),
@@ -1335,7 +1335,7 @@ namespace celestemeow
                 throw new NotSupportedException("The iOS gate cannot resolve an original body for " + target + ".");
 
             string name = IOSHookIdentity.OriginalMethodName(target);
-            if (target.DeclaringType == null)
+            if (IsModuleInitializer(target))
             {
                 Type container = target.Module.Assembly.GetType(IOSHookIdentity.ModuleOriginalContainerName(target), false, false);
                 MethodInfo moduleOriginal = container?.GetMethod(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
@@ -1362,6 +1362,16 @@ namespace celestemeow
             if (method != null && method.IsGenericMethod && !method.IsGenericMethodDefinition)
                 original = original.GetGenericMethodDefinition().MakeGenericMethod(method.GetGenericArguments());
             return original;
+        }
+
+        private static bool IsModuleInitializer(MethodBase target)
+        {
+            Type declaringType = target?.DeclaringType;
+            // CoreCLR exposes a global <Module> method with a null declaring
+            // type, while the iOS interpreter exposes the synthetic <Module>
+            // Type. Both refer to the same module initializer and its generated
+            // original body/gate live in the weaver's per-method container.
+            return declaringType == null || declaringType.Name == "<Module>";
         }
 
         private static MethodInfo CloseHookMethodForTarget(MethodInfo hookMethod, MethodBase target,

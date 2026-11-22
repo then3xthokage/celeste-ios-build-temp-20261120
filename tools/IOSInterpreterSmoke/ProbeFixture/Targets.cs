@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 
 public delegate int ProbeAddOriginal(int left, int right);
 public delegate int ProbeAddHook(ProbeAddOriginal original, int left, int right);
+public delegate void ProbeModuleInitializerOriginal();
+public delegate void ProbeModuleInitializerHook(ProbeModuleInitializerOriginal original);
 public delegate ref T ProbeGenericEchoOriginal<T>(ref T value);
 public delegate int LuaCallbackSmoke(int value);
 public delegate void ProbeRefLikeConstructorOriginal(ref ProbeRefLikeConstructorTarget target, int value, out bool initialized);
@@ -23,6 +25,17 @@ public static class ProbeModuleInitializer
     public static void Initialize() => Value = 73;
 }
 #pragma warning restore CA2255
+
+public static class ProbeModuleInitializerHooks
+{
+    public static int Calls;
+
+    public static void OnInitialize(ProbeModuleInitializerOriginal original)
+    {
+        Calls++;
+        original();
+    }
+}
 
 public static class ProbeTarget
 {
