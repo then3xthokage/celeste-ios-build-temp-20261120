@@ -72,8 +72,8 @@ namespace celestemeow
                 SDL2.SDL.SDL_SetHint(SDL.SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
                 SDL2.SDL.SDL_SetHint(SDL.SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
 
-                Console.WriteLine("setting SDL hint FNA3D_FORCE_DRIVER to Metal");
-                SDL2.SDL.SDL_SetHint("FNA3D_FORCE_DRIVER", "Metal");
+                Console.WriteLine("setting SDL hint FNA3D_FORCE_DRIVER to Vulkan");
+                SDL2.SDL.SDL_SetHint("FNA3D_FORCE_DRIVER", "Vulkan");
                 TraceStartup("SDL hints set");
 
                 realArgs = args;
