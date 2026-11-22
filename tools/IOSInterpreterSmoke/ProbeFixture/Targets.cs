@@ -2,6 +2,12 @@ using System.Runtime.CompilerServices;
 
 public delegate int ProbeAddOriginal(int left, int right);
 public delegate int ProbeAddHook(ProbeAddOriginal original, int left, int right);
+public delegate int LuaCallbackSmoke(int value);
+
+public interface ILuaClassSmoke
+{
+    int GetValue();
+}
 
 #pragma warning disable CA2255
 public static class ProbeModuleInitializer

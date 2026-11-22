@@ -16,7 +16,6 @@ internal static class RuntimeProbe
     {
         IOSHookRuntime.Initialize();
         VerifyCecilGeneratedMethod();
-        VerifyNLuaCodeGenerationBootstrap();
 
         string fixturePath = Path.Combine(AppContext.BaseDirectory, "ProbeFixture.dll");
         byte[] original = File.ReadAllBytes(fixturePath);
@@ -27,6 +26,7 @@ internal static class RuntimeProbe
 
         Assembly fixture = Assembly.Load(woven);
         IOSILHookRuntime.RegisterAssemblySnapshot(fixture, woven);
+        VerifyNLuaCodeGeneration(fixture);
         RuntimeHelpers.RunModuleConstructor(fixture.ManifestModule.ModuleHandle);
         Type moduleState = fixture.GetType("ProbeModuleInitializer", throwOnError: true);
         if ((int)moduleState.GetField("Value").GetValue(null) != 73)
@@ -74,13 +74,29 @@ internal static class RuntimeProbe
         AssertEqual("MonoMod Cecil generated method", 42, dmd.Generate().Invoke(null, null));
     }
 
-    private static void VerifyNLuaCodeGenerationBootstrap()
+    private static void VerifyNLuaCodeGeneration(Assembly fixture)
     {
         Assembly nlua = typeof(NLua.Lua).Assembly;
         Type codeGeneration = nlua.GetType("NLua.CodeGeneration", throwOnError: true);
         PropertyInfo instance = codeGeneration.GetProperty("Instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         if (instance == null || instance.GetValue(null) == null)
             throw new InvalidOperationException("NLua's shared code-generation service did not initialize.");
+
+        object generator = instance.GetValue(null);
+        Type fakeFunctionType = nlua.GetType("NLua.LuaFunction", throwOnError: true);
+        object fakeFunction = RuntimeHelpers.GetUninitializedObject(fakeFunctionType);
+        Type callbackType = fixture.GetType("LuaCallbackSmoke", throwOnError: true);
+        MethodInfo getDelegate = codeGeneration.GetMethod("GetDelegate", BindingFlags.Public | BindingFlags.Instance);
+        Delegate callback = (Delegate)getDelegate.Invoke(generator, new[] { callbackType, fakeFunction });
+        if (!callbackType.IsInstanceOfType(callback))
+            throw new InvalidOperationException("NLua did not produce a delegate for the requested callback signature.");
+
+        object fakeTable = RuntimeHelpers.GetUninitializedObject(nlua.GetType("NLua.LuaTable", throwOnError: true));
+        Type luaClassInterface = fixture.GetType("ILuaClassSmoke", throwOnError: true);
+        MethodInfo getClassInstance = codeGeneration.GetMethod("GetClassInstance", BindingFlags.Public | BindingFlags.Instance);
+        object luaClass = getClassInstance.Invoke(generator, new[] { luaClassInterface, fakeTable });
+        if (!luaClassInterface.IsInstanceOfType(luaClass))
+            throw new InvalidOperationException("NLua did not create an implementation of the requested Lua interface.");
     }
 
     private static void AssertEqual(string label, int expected, object actual)
