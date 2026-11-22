@@ -368,23 +368,32 @@ namespace celestemeow
 
         private async Task InstallModAsync(CatalogMod mod, UIButton button)
         {
+            if (!BeginModAction())
+            {
+                if (button != null) button.Enabled = true;
+                return;
+            }
             try
             {
                 IProgress<string> progress = new Progress<string>(message => SetStatus(message));
                 string result = await IOSModLibrary.InstallAsync(mod, progress);
-                if (button != null) button.Enabled = true;
                 SetStatus(result);
                 if (currentPage == "installed") ShowInstalled();
             }
             catch (Exception exception)
             {
-                if (button != null) button.Enabled = true;
                 SetStatus("Install failed: " + exception.Message, true);
+            }
+            finally
+            {
+                if (button != null) button.Enabled = true;
+                EndModAction();
             }
         }
 
         private async void UpdateMods()
         {
+            if (!BeginModAction()) return;
             searchContainer.Hidden = true;
             ClearRows();
             AddMessage("Checking Everest's update list. Each downloaded update is verified before it replaces the installed ZIP.");
@@ -400,11 +409,15 @@ namespace celestemeow
             {
                 SetStatus("Update check failed: " + exception.Message, true);
             }
+            finally
+            {
+                EndModAction();
+            }
         }
 
         private async void StartGame()
         {
-            if (startingGame) return;
+            if (!BeginModAction()) return;
             startingGame = true;
             playButton.Enabled = false;
             try
@@ -437,6 +450,7 @@ namespace celestemeow
             {
                 startingGame = false;
                 playButton.Enabled = true;
+                EndModAction();
             }
         }
 
