@@ -17,7 +17,7 @@
     <ValidateXcodeVersion>false</ValidateXcodeVersion>
     <UseMonoRuntime>false</UseMonoRuntime>
     <DynamicCodeSupport>true</DynamicCodeSupport>
-    <PublishTrimmed>false</PublishTrimmed>
+    <MtouchLink>None</MtouchLink>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 

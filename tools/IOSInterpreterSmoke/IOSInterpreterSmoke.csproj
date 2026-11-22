@@ -9,7 +9,7 @@
     <EnableCodeSigning>false</EnableCodeSigning>
     <UseMonoRuntime>false</UseMonoRuntime>
     <DynamicCodeSupport>true</DynamicCodeSupport>
-    <PublishTrimmed>false</PublishTrimmed>
+    <MtouchLink>None</MtouchLink>
     <DefineConstants>$(DefineConstants);__IOS__</DefineConstants>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
