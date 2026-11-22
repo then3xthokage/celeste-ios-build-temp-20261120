@@ -39,8 +39,8 @@
     </Reference>
     <ImageAsset Include="Assets.xcassets/**/*" />
     <BundleResource Include="Content/**/*" TargetPath="Content/%(RecursiveDir)%(Filename)%(Extension)" />
-    <BundleResource Include="../celeste/FNA.dll" TargetPath="FNA.dll" />
-    <BundleResource Include="../EverestRuntime/*.dll" TargetPath="%(Filename)%(Extension)" />
+    <BundleResource Include="RuntimeAssemblies/FNA.dll" TargetPath="FNA.dll" />
+    <BundleResource Include="RuntimeAssemblies/Everest/*.dll" TargetPath="%(Filename)%(Extension)" />
     <BundleResource Include="celeste/mscorlib.dll" />
     <BundleResource Include="celeste/Celeste.Content.dll" />
     <BundleResource Include="celeste/Celeste.dll.config" />

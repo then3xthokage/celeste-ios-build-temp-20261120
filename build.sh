@@ -624,6 +624,16 @@ copy_game_files "$script_dir/celeste/mscorlib.dll" "$script_dir/celestemeow/cele
 copy_game_files "$script_dir/celeste/Celeste.Content.dll" "$script_dir/celestemeow/celeste/"
 copy_game_files "$script_dir/celeste/Celeste.dll.config" "$script_dir/celestemeow/celeste/"
 
+# Bundle runtime assemblies from inside the iOS project tree. The iOS SDK rejects
+# BundleResource items whose source paths are outside the app bundle directory.
+runtime_resource_dir="$script_dir/celestemeow/RuntimeAssemblies"
+rm -rf "$runtime_resource_dir"
+mkdir -p "$runtime_resource_dir/Everest"
+copy_game_files "$script_dir/celeste/FNA.dll" "$runtime_resource_dir/FNA.dll"
+for runtime_assembly in "$everest_runtime"/*.dll; do
+	copy_game_files "$runtime_assembly" "$runtime_resource_dir/Everest/"
+done
+
 info "building native libraries"
 cd "$script_dir/fnalibs-ios-builder-celeste" || cd_fail
 
