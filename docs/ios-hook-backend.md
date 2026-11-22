@@ -82,14 +82,20 @@ sidecar body for the iOS interpreter. Calls, locals, branches, and exception
 regions are copied with the body. Removing the final manipulator restores the
 untouched original body.
 
-IL-hook targets must currently be closed, non-generic managed methods. This is
-the main known method-shape limitation. A second limitation is that gates use
-object-based dispatch: methods with pointer, function-pointer, typed-reference,
-by-reference return, or byref-like signatures cannot be hooked through this
-backend. Such methods still retain their original callable implementation.
-Methods exposed by `MMHOOK_Celeste` and the methods used by Strawberry Jam
-must be checked against those limits; the manager does not claim every
-third-party package is compatible merely because its ZIP installs.
+IL-hook targets must currently be closed methods; an IL hook cannot target an
+open generic method or type. Hook gates preserve unusual CLR signatures with
+exact typed delegates and generated managed adapters, so by-reference returns,
+`ref` / `out` / `in`, pointers, function pointers, typed references, and
+byref-like values do not cross an object-boxing boundary. The generated IL is
+loaded by Mono's interpreter and does not require runtime native-code emission.
+
+Fresh iOS weaving of the patched game and FNA inputs completed with 11,538 and
+3,817 methods woven and no skipped hookable bodies. The audited current mod DLL
+set also wove without module failures or unhookable method shapes. A repeat
+scan of already-woven game copies can report their generated constructor gates
+as skipped; those existing gates remain intact, and a repeat scan is not the
+compatibility measure. The smoke suite exercises the typed paths for
+by-reference returns, byref-like spans, pointers, and value-type instances.
 
 Mods that require desktop-only APIs, native libraries, `Reflection.Emit`, or
 another runtime-specific facility need an iOS implementation of that facility.
@@ -135,11 +141,11 @@ Verification record (November 22, 2026):
   the one Windows-only `shlwapi!ColorHLSToRGB` import became a managed call.
   That conversion matched the Windows export for every one of the 241³ legal
   H/L/S input tuples.
-- Twenty-six existing mod methods have byref-like or managed-reference return
-  signatures that cannot be represented by this object-based hook gate. They
-  remain callable with their original bodies. One additional direct method is
-  the generated native compatibility wrapper and is intentionally left
-  unhooked. No package-specific switch is used by dependency resolution.
+- In the current package-level rescan, every managed mod assembly completed
+  weaving with no skipped hookable methods. The one intentional direct runtime
+  method is MonoMod's generic DMD dispatch trampoline, retained for AOT generic
+  method compatibility. No package-specific dependency-resolution switch is
+  used.
 
 The current code checks verify static dependency resolution and assembly
 weaving. A fresh GitHub iOS build, install on the iPhone 15 Pro and iPad Pro

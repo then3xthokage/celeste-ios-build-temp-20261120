@@ -758,19 +758,17 @@ if ! dotnet publish "$script_dir/celestemeow/ci-ios.csproj" \
 	exit 1
 fi
 
-ios_executable="$(find "$script_dir/celestemeow/bin" -type f -path '*/ci-ios.app/ci-ios' -print -quit)"
-if [ -z "$ios_executable" ]; then
-	error "the iOS app executable was not generated"
-	exit 1
-fi
-if ! python3 "$script_dir/tools/verify-ios-native-exports.py" "$ios_executable"; then
-	error "the iOS executable does not export all decoder symbols required by code mods"
-	exit 1
-fi
-
 info "moving built ipa to $script_dir"
 ipa_path="$(find "$script_dir/celestemeow/bin" -type f -name '*.ipa' -print -quit)"
-if [ -z "$ipa_path" ] || ! mv "$ipa_path" "$script_dir/celestemeow.ipa"; then error "failed to move ipa"; exit 1; fi
+if [ -z "$ipa_path" ]; then
+	error "the iOS app package was not generated"
+	exit 1
+fi
+if ! python3 "$script_dir/tools/verify-ios-native-exports.py" "$ipa_path"; then
+	error "the packaged iOS app does not export all decoder symbols required by code mods"
+	exit 1
+fi
+if ! mv "$ipa_path" "$script_dir/celestemeow.ipa"; then error "failed to move ipa"; exit 1; fi
 
 success "done building celeste for ios!"
 success "the ipa is located in '$script_dir' and can be installed using something like TrollStore or AltStore" 1
