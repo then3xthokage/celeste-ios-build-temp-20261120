@@ -1,15 +1,40 @@
 diff --git a/src/MonoMod.Utils/DMDGenerators/DMDCecilGenerator.cs b/src/MonoMod.Utils/DMDGenerators/DMDCecilGenerator.cs
-index 2223d163..09c38914 100644
+index 2223d163..9a7bf0e8 100644
 --- a/src/MonoMod.Utils/DMDGenerators/DMDCecilGenerator.cs
 +++ b/src/MonoMod.Utils/DMDGenerators/DMDCecilGenerator.cs
-@@ -58,7 +58,9 @@ namespace MonoMod.Utils
-                         Mono.Cecil.TypeAttributes.Public | Mono.Cecil.TypeAttributes.Abstract | Mono.Cecil.TypeAttributes.Sealed | Mono.Cecil.TypeAttributes.Class
-                     )
-                     {
--                        BaseType = module.TypeSystem.Object
-+                        // Dynamic DMD assemblies run on the current CLR, whose core library may
-+                        // be System.Private.CoreLib rather than Cecil's default mscorlib facade.
-+                        BaseType = module.ImportReference(typeof(object))
-                     };
+@@ -175,6 +175,8 @@ namespace MonoMod.Utils
+                     clone.Parameters.Insert(0, new ParameterDefinition("<>_this", Mono.Cecil.ParameterAttributes.None, type.Relink(relinker, clone)));
+                 }
  
-                     module.Types.Add(typeDef);
++                NormalizeRuntimeCoreLibraryReferences(module);
++
+                 var envDmdDump = Switches.TryGetSwitchValue(Switches.DMDDumpTo, out var dumpToVal) ? dumpToVal as string : null;
+                 if (!string.IsNullOrEmpty(envDmdDump))
+                 {
+@@ -205,5 +207,26 @@ namespace MonoMod.Utils
+             }
+         }
+ 
++        private static void NormalizeRuntimeCoreLibraryReferences(ModuleDefinition module)
++        {
++            if (!ReflectionHelper.IsCoreBCL)
++                return;
++
++            AssemblyName runtimeCoreLibrary = typeof(object).Assembly.GetName();
++            foreach (AssemblyNameReference reference in module.AssemblyReferences)
++            {
++                if (!string.Equals(reference.Name, "mscorlib", StringComparison.OrdinalIgnoreCase))
++                    continue;
++
++                // Cecil creates temporary DMD modules with the .NET Framework corelib identity.
++                // Dynamic assemblies loaded by CoreCLR and .NET for iOS must bind those type refs
++                // to the runtime's actual core library instead.
++                reference.Name = runtimeCoreLibrary.Name;
++                reference.Version = runtimeCoreLibrary.Version;
++                reference.Culture = runtimeCoreLibrary.CultureName;
++                reference.PublicKeyToken = runtimeCoreLibrary.GetPublicKeyToken() ?? Array.Empty<byte>();
++            }
++        }
++
+     }
+ }
