@@ -233,6 +233,8 @@ jobs:
         run: |
           set -euo pipefail
           printf '{"sdk":{"version":"11.0.100","rollForward":"latestPatch"}}\n' > "$RUNNER_TEMP/global.json"
+          # The smoke app needs NLua's managed code generator, not its device-only Lua framework.
+          dotnet build "$GITHUB_WORKSPACE/Everest/external/NLua/build/net8.0/NLua.net8.0.csproj" --configuration Release
           smoke_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/IOSInterpreterSmoke.csproj"
           fixture_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/ProbeFixture/ProbeFixture.csproj"
           dotnet build "$fixture_project" --configuration Release

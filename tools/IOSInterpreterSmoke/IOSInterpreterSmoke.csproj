@@ -17,7 +17,10 @@
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
     <PackageReference Include="KeraLua" Version="1.4.7" ExcludeAssets="native;build;buildTransitive" />
     <ProjectReference Include="../../Everest/external/MonoMod/src/MonoMod.Utils/MonoMod.Utils.csproj" />
-    <ProjectReference Include="../../Everest/external/NLua/build/net8.0/NLua.net8.0.csproj" />
+    <Reference Include="NLua">
+      <HintPath>../../Everest/external/NLua/lib/Release/NLua.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
     <ProjectReference Include="ProbeFixture/ProbeFixture.csproj" ReferenceOutputAssembly="false" />
     <Compile Include="AppDelegate.cs" />
     <Compile Include="Program.cs" />
