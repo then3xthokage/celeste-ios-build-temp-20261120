@@ -714,6 +714,7 @@ else
 	cd "$script_dir/fnalibs-ios-builder-celeste/FNA3D" || cd_fail
 	apply_patch "$script_dir/patches/FNA-FNA3D-renderer.patch"
 	cd "$script_dir/fnalibs-ios-builder-celeste" || cd_fail
+	apply_patch "$script_dir/patches/fnalibs-ios-disable-opengl.patch"
 	if [ "${ENABLE_VIRTUAL_CONTROLLER:-0}" = "1" ]; then
 		info "enabling optional iOS virtual controller"
 		cd "$script_dir/fnalibs-ios-builder-celeste/SDL2" || cd_fail

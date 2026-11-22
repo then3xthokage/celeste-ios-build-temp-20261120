@@ -1,0 +1,13 @@
+diff --git a/buildlibs.sh b/buildlibs.sh
+index 35b0a00..31e8079 100755
+--- a/buildlibs.sh
++++ b/buildlibs.sh
+@@ -128,7 +128,6 @@ function buildFNA3D()
+ 
+ 	# iOS Device
+ 	if [ $IOS = 1 ]; then
+-		xcodebuild -project $FNA3D_DIR/$FNA3D_PROJ -target FNA3D -config Release -sdk iphoneos \
+-                        GCC_PREPROCESSOR_DEFINITIONS='$GCC_PREPROCESSOR_DEFINITIONS FNA3D_DRIVER_OPENGL=1'
++		xcodebuild -project $FNA3D_DIR/$FNA3D_PROJ -target FNA3D -config Release -sdk iphoneos
+ 		cp $FNA3D_DIR/build/Release-iphoneos/libFNA3D.a ./release/ios/device/libFNA3D.a
+ 	fi
