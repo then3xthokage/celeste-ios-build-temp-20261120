@@ -121,8 +121,18 @@ namespace celestemeow
             lock (Sync)
             {
                 Registration[] registrations;
-                return Hooks.TryGetValue(target, out registrations) ? registrations.Length : 0;
+                if (Hooks.TryGetValue(target, out registrations)) return registrations.Length;
+                MethodBase openGenericTarget = GetOpenGenericDefinition(target);
+                return openGenericTarget != null && Hooks.TryGetValue(openGenericTarget, out registrations)
+                    ? registrations.Length
+                    : 0;
             }
+        }
+
+        private static MethodBase GetOpenGenericDefinition(MethodBase target)
+        {
+            MethodBase definition = IOSHookIdentity.GetDefinition(target);
+            return definition.Equals(target) ? null : definition;
         }
 
         private static Registration MakeRegistration(MethodBase target, Delegate manipulator, object config)
@@ -209,9 +219,6 @@ namespace celestemeow
             MethodInfo targetMethod = target as MethodInfo;
             if (targetMethod == null && !(target is ConstructorInfo))
                 throw new NotSupportedException("IL hooks require a managed method or constructor: " + target);
-            if (target.ContainsGenericParameters)
-                throw new NotSupportedException("An IL hook must target a closed generic method or type on iOS: " + target);
-
             ReaderParameters readerParameters = new ReaderParameters
             {
                 InMemory = true,
@@ -386,7 +393,7 @@ namespace celestemeow
                 if (loadedMethod.IsGenericMethodDefinition && target is MethodInfo closedMethod && closedMethod.IsGenericMethod &&
                     !closedMethod.IsGenericMethodDefinition)
                     loadedMethod = loadedMethod.MakeGenericMethod(closedMethod.GetGenericArguments());
-                if (loadedMethod.ContainsGenericParameters)
+                if (loadedMethod.ContainsGenericParameters && !target.ContainsGenericParameters)
                     throw new InvalidOperationException("The iOS IL hook sidecar did not close all generic parameters for " + target + ".");
                 return loadedMethod;
             }

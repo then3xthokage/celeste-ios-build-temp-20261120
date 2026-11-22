@@ -82,9 +82,12 @@ sidecar body for the iOS interpreter. Calls, locals, branches, and exception
 regions are copied with the body. Removing the final manipulator restores the
 untouched original body.
 
-IL-hook targets must currently be closed methods; an IL hook cannot target an
-open generic method or type. Hook gates preserve unusual CLR signatures with
-exact typed delegates and generated managed adapters, so by-reference returns,
+IL hooks can target closed methods or open generic definitions, including
+methods on open generic types. The weaver gives open generic targets a shared
+gate, and each interpreted sidecar closes over the concrete type and method
+arguments at dispatch time. `On` hooks and detours still require closed generic
+targets. Hook gates preserve unusual CLR signatures with exact typed delegates
+and generated managed adapters, so by-reference returns,
 `ref` / `out` / `in`, pointers, function pointers, typed references, and
 byref-like values do not cross an object-boxing boundary. The generated IL is
 loaded by Mono's interpreter and does not require runtime native-code emission.

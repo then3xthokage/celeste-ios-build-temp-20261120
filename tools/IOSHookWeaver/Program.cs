@@ -661,12 +661,37 @@ public static class IOSHookWeaver
             FieldAttributes.Private | FieldAttributes.Static,
             method.Module.TypeSystem.Boolean);
         type.Fields.Add(gate);
+        FieldDefinition genericOpenGate = CreateGenericOpenGateField(method);
         MethodBody gateBody = typedDelegate == null
-            ? CreateGateBody(method, original, gate)
-            : CreateTypedGateBody(method, original, gate, typedDelegate);
+            ? CreateGateBody(method, original, gate, genericOpenGate)
+            : CreateTypedGateBody(method, original, gate, typedDelegate, genericOpenGate);
         if (constructorChainIndex >= 0)
             PrependConstructorChainCall(method, gateBody, constructorChainIndex);
         method.Body = gateBody;
+    }
+
+    private static FieldDefinition CreateGenericOpenGateField(MethodDefinition method)
+    {
+        if (!method.DeclaringType.HasGenericParameters) return null;
+        ModuleDefinition module = method.Module;
+        TypeDefinition state = module.Types.FirstOrDefault(type => type.FullName == IOSHookIdentity.GenericGateStateTypeFullName);
+        if (state == null)
+        {
+            state = new TypeDefinition(
+                "CelesteIOS.Generated",
+                "__CelesteIOSGenericGateState",
+                Mono.Cecil.TypeAttributes.NotPublic | Mono.Cecil.TypeAttributes.Abstract |
+                Mono.Cecil.TypeAttributes.Sealed | Mono.Cecil.TypeAttributes.BeforeFieldInit,
+                module.ImportReference(typeof(object)));
+            module.Types.Add(state);
+        }
+
+        string name = IOSHookIdentity.GenericOpenGateFieldName(method);
+        FieldDefinition field = state.Fields.FirstOrDefault(candidate => candidate.Name == name);
+        if (field != null) return field;
+        field = new FieldDefinition(name, FieldAttributes.Assembly | FieldAttributes.Static, module.TypeSystem.Boolean);
+        state.Fields.Add(field);
+        return field;
     }
 
     private static TypeDefinition CreateTypedDelegateType(MethodDefinition method, string name)
@@ -1109,7 +1134,7 @@ public static class IOSHookWeaver
         return instruction == null ? null : map[instruction];
     }
 
-    private static MethodBody CreateGateBody(MethodDefinition method, MethodDefinition original, FieldDefinition gate)
+    private static MethodBody CreateGateBody(MethodDefinition method, MethodDefinition original, FieldDefinition gate, FieldDefinition genericOpenGate)
     {
         MethodBody body = new MethodBody(method) { InitLocals = true, MaxStackSize = 12 };
         ILProcessor il = body.GetILProcessor();
@@ -1123,6 +1148,11 @@ public static class IOSHookWeaver
         {
             il.Append(il.Create(OpCodes.Ldsfld, CreateGateFieldReference(gate, method)));
             il.Append(il.Create(OpCodes.Brtrue, dispatch));
+            if (genericOpenGate != null)
+            {
+                il.Append(il.Create(OpCodes.Ldsfld, genericOpenGate));
+                il.Append(il.Create(OpCodes.Brtrue, dispatch));
+            }
             if (!method.IsStatic) il.Append(il.Create(OpCodes.Ldarg_0));
             foreach (ParameterDefinition parameter in method.Parameters) il.Append(LoadArgument(il, parameter.Index + (method.IsStatic ? 0 : 1)));
             il.Append(il.Create(OpCodes.Call, CreateOriginalCall(original, method)));
@@ -1196,7 +1226,8 @@ public static class IOSHookWeaver
         return body;
     }
 
-    private static MethodBody CreateTypedGateBody(MethodDefinition method, MethodDefinition original, FieldDefinition gate, TypeDefinition delegateType)
+    private static MethodBody CreateTypedGateBody(MethodDefinition method, MethodDefinition original, FieldDefinition gate,
+        TypeDefinition delegateType, FieldDefinition genericOpenGate)
     {
         MethodBody body = new MethodBody(method) { InitLocals = true, MaxStackSize = 8 };
         ILProcessor il = body.GetILProcessor();
@@ -1204,6 +1235,11 @@ public static class IOSHookWeaver
 
         il.Append(il.Create(OpCodes.Ldsfld, CreateGateFieldReference(gate, method)));
         il.Append(il.Create(OpCodes.Brtrue, dispatch));
+        if (genericOpenGate != null)
+        {
+            il.Append(il.Create(OpCodes.Ldsfld, genericOpenGate));
+            il.Append(il.Create(OpCodes.Brtrue, dispatch));
+        }
         if (!method.IsStatic) il.Append(il.Create(OpCodes.Ldarg_0));
         foreach (ParameterDefinition parameter in method.Parameters)
             il.Append(LoadArgument(il, parameter.Index + (method.IsStatic ? 0 : 1)));

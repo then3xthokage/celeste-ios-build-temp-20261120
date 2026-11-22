@@ -14,6 +14,8 @@ namespace celestemeow
     /// </summary>
     internal static class IOSHookIdentity
     {
+        internal const string GenericGateStateTypeFullName = "CelesteIOS.Generated.__CelesteIOSGenericGateState";
+
         internal static string ForMethod(MethodBase method)
         {
             if (method == null) throw new ArgumentNullException(nameof(method));
@@ -41,12 +43,14 @@ namespace celestemeow
         internal static string OriginalMethodName(MethodBase method) => "__ios_original_" + ForMethod(method);
         internal static string ValueTypeInvokerName(MethodBase method) => "__ios_original_static_" + ForMethod(method);
         internal static string TypedOriginalAdapterName(MethodBase method) => "__ios_typed_original_" + ForMethod(method);
+        internal static string GenericOpenGateFieldName(MethodBase method) => "__ios_open_generic_hooked_" + ForMethod(method);
+        internal static string GenericOpenGateFieldName(MethodDefinition method) => "__ios_open_generic_hooked_" + ForMethod(method);
         internal static string GateFieldName(MethodDefinition method) => "__ios_hooked_" + ForMethod(method);
         internal static string OriginalMethodName(MethodDefinition method) => "__ios_original_" + ForMethod(method);
         internal static string ValueTypeInvokerName(MethodDefinition method) => "__ios_original_static_" + ForMethod(method);
         internal static string TypedOriginalAdapterName(MethodDefinition method) => "__ios_typed_original_" + ForMethod(method);
 
-        private static MethodBase GetDefinition(MethodBase method)
+        internal static MethodBase GetDefinition(MethodBase method)
         {
             if (method is MethodInfo methodInfo && methodInfo.IsGenericMethod && !methodInfo.IsGenericMethodDefinition)
                 method = methodInfo.GetGenericMethodDefinition();

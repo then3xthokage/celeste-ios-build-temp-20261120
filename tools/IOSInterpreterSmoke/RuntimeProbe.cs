@@ -67,6 +67,36 @@ internal static class RuntimeProbe
         AssertEqual("ILContext sidecar on iOS interpreter", 11, constant.Invoke(null, null));
         IOSILHookRuntime.Remove(constant, editConstant);
         AssertEqual("IL hook removal", 5, constant.Invoke(null, null));
+
+        Type genericTypeDefinition = fixture.GetType("ProbeGenericTypeTarget`1", throwOnError: true);
+        Type genericType = genericTypeDefinition.MakeGenericType(typeof(int));
+        MethodInfo genericTypeMethodDefinition = genericTypeDefinition.GetMethod("GenericTypeConstant", BindingFlags.Public | BindingFlags.Static);
+        MethodInfo genericTypeMethod = genericType.GetMethod("GenericTypeConstant", BindingFlags.Public | BindingFlags.Static);
+        ILContext.Manipulator editGenericType = context => ReplaceString(
+            context, "original-open-type", "patched-open-type");
+        IOSILHookRuntime.Add(genericTypeMethodDefinition, editGenericType, null);
+        AssertEqual("Open generic type ILContext sidecar on iOS interpreter", "patched-open-type", genericTypeMethod.Invoke(null, null)?.ToString());
+        IOSILHookRuntime.Remove(genericTypeMethodDefinition, editGenericType);
+        AssertEqual("Open generic type IL hook removal on iOS interpreter", "original-open-type", genericTypeMethod.Invoke(null, null)?.ToString());
+
+        Type genericTargetType = fixture.GetType("ProbeGenericMethodTarget", throwOnError: true);
+        MethodInfo genericDefinition = genericTargetType.GetMethod("GenericConstant", BindingFlags.Public | BindingFlags.Static);
+        MethodInfo genericClosed = genericDefinition.MakeGenericMethod(typeof(int));
+        ILContext.Manipulator editGeneric = context =>
+        {
+            foreach (Instruction instruction in context.Body.Instructions)
+            {
+                if (instruction.OpCode != Mono.Cecil.Cil.OpCodes.Ldstr ||
+                    !string.Equals(instruction.Operand as string, "original-generic", StringComparison.Ordinal)) continue;
+                instruction.Operand = "patched-generic";
+                return;
+            }
+            throw new InvalidOperationException("The open generic IL smoke target's string instruction was not found.");
+        };
+        IOSILHookRuntime.Add(genericDefinition, editGeneric, null);
+        AssertEqual("Open generic ILContext sidecar on iOS interpreter", "patched-generic", genericClosed.Invoke(null, null)?.ToString());
+        IOSILHookRuntime.Remove(genericDefinition, editGeneric);
+        AssertEqual("Open generic IL hook removal on iOS interpreter", "original-generic", genericClosed.Invoke(null, null)?.ToString());
     }
 
     private static void VerifyCecilGeneratedMethod()
@@ -107,5 +137,23 @@ internal static class RuntimeProbe
     {
         if (!(actual is int value) || value != expected)
             throw new InvalidOperationException(label + " expected " + expected + " but got " + (actual ?? "null") + ".");
+    }
+
+    private static void AssertEqual(string label, string expected, string actual)
+    {
+        if (!string.Equals(actual, expected, StringComparison.Ordinal))
+            throw new InvalidOperationException(label + " expected " + expected + " but got " + (actual ?? "null") + ".");
+    }
+
+    private static void ReplaceString(ILContext context, string original, string replacement)
+    {
+        foreach (Instruction instruction in context.Body.Instructions)
+        {
+            if (instruction.OpCode != Mono.Cecil.Cil.OpCodes.Ldstr ||
+                !string.Equals(instruction.Operand as string, original, StringComparison.Ordinal)) continue;
+            instruction.Operand = replacement;
+            return;
+        }
+        throw new InvalidOperationException("The open generic IL smoke target string instruction was not found.");
     }
 }

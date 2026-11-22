@@ -95,15 +95,20 @@ internal static class Program
         CallLegacyHookManager(everestRuntime, "Remove", colorImport, colorHook);
         int colorAfterRemoval = (int)colorImport.Invoke(null, new object[] { 160, 120, 0 });
 
-        Type genericILType = targetAssembly.GetType("GenericILTypeTarget`1", true).MakeGenericType(typeof(int));
+        Type genericILTypeDefinition = targetAssembly.GetType("GenericILTypeTarget`1", true);
+        Type genericILType = genericILTypeDefinition.MakeGenericType(typeof(int));
         MethodInfo genericILTypeMethod = genericILType.GetMethod("GetTypeValue");
-        IOSILHookRuntime.Add(genericILTypeMethod, ReplaceLiteral("original-type", "patched-type"), null);
+        MethodInfo genericILTypeMethodDefinition = genericILTypeDefinition.GetMethod("GetTypeValue");
+        ILContext.Manipulator genericILTypeManipulator = ReplaceLiteral("original-type", "patched-type");
+        IOSILHookRuntime.Add(genericILTypeMethodDefinition, genericILTypeManipulator, null);
         MethodInfo genericILInstanceMethod = genericILType.GetMethod("GetInstanceValue");
         IOSILHookRuntime.Add(genericILInstanceMethod, ReplaceLiteral("original-instance", "patched-instance"), null);
         object genericILInstance = Activator.CreateInstance(genericILType);
         Type genericILMethodType = targetAssembly.GetType("GenericILMethodTarget", true);
-        MethodInfo genericILMethod = genericILMethodType.GetMethod("GetMethodValue").MakeGenericMethod(typeof(int));
-        IOSILHookRuntime.Add(genericILMethod, ReplaceLiteral("original-method", "patched-method"), null);
+        MethodInfo genericILMethodDefinition = genericILMethodType.GetMethod("GetMethodValue");
+        MethodInfo genericILMethod = genericILMethodDefinition.MakeGenericMethod(typeof(int));
+        ILContext.Manipulator genericILManipulator = ReplaceLiteral("original-method", "patched-method");
+        IOSILHookRuntime.Add(genericILMethodDefinition, genericILManipulator, null);
         Type constructorILType = targetAssembly.GetType("ConstructorILTarget", true);
         ConstructorInfo constructorIL = constructorILType.GetConstructor(Type.EmptyTypes);
         CallLegacyHookManager(everestRuntime, "Modify", constructorIL,
@@ -251,6 +256,10 @@ internal static class Program
         AssertEqual("generic callbacks", "1/1/1", $"{genericTypeCalls}/{genericMethodCalls}/{genericCombinedCalls}");
         AssertEqual("generic IL hooks", "patched-type/patched-instance/patched-method",
             $"{genericILTypeMethod.Invoke(null, null)}/{genericILInstanceMethod.Invoke(genericILInstance, null)}/{genericILMethod.Invoke(null, null)}");
+        IOSILHookRuntime.Remove(genericILMethodDefinition, genericILManipulator);
+        AssertEqual("open generic IL hook removal", "original-method", genericILMethod.Invoke(null, null).ToString());
+        IOSILHookRuntime.Remove(genericILTypeMethodDefinition, genericILTypeManipulator);
+        AssertEqual("open generic declaring type IL hook removal", "original-type", genericILTypeMethod.Invoke(null, null).ToString());
         object constructorILInstance = Activator.CreateInstance(constructorILType);
         int staticConstructorValue = CallStatic<int>(staticConstructorType, "GetValue");
         object structILInstance = Activator.CreateInstance(structILType);
@@ -261,7 +270,7 @@ internal static class Program
         AssertEqual("rewritten Windows HLS import remains hookable", "007F7F86/1", $"{colorHookValue:X8}/{colorHookCalls}");
         AssertEqual("Everest legacy On removal", "007F7F7F", colorAfterRemoval.ToString("X8"));
 
-        Console.WriteLine("Typed hook smoke passed: woven=" + wovenCount + "; patched Everest On/IL integration and removal; native decoder imports; hookable Windows HLS import shim; app-bundle and in-memory mod dependency resolution; ref-return, exact ref-readonly modifiers, in/ref, Span, pointer and function-pointer signatures; value-type instance detours and constructors; branchy and generic constructor chains; static constructors; generic type/method combinations; reflected callbacks; and cross-load-context dispatch.");
+        Console.WriteLine("Typed hook smoke passed: woven=" + wovenCount + "; patched Everest On/IL integration and removal; open generic IL methods and declaring types; native decoder imports; hookable Windows HLS import shim; app-bundle and in-memory mod dependency resolution; ref-return, exact ref-readonly modifiers, in/ref, Span, pointer and function-pointer signatures; value-type instance detours and constructors; branchy and generic constructor chains; static constructors; generic type/method combinations; reflected callbacks; and cross-load-context dispatch.");
         return 0;
     }
 

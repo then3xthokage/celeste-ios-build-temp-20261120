@@ -25,6 +25,16 @@ public static class ProbeTarget
     public static int Constant() => 5;
 }
 
+public static class ProbeGenericTypeTarget<T>
+{
+    public static string GenericTypeConstant() => "original-open-type";
+}
+
+public static class ProbeGenericMethodTarget
+{
+    public static string GenericConstant<T>() => "original-generic";
+}
+
 public static class ProbeHooks
 {
     public static int Add(ProbeAddOriginal original, int left, int right) => original(left, right) + 5;

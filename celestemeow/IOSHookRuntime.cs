@@ -360,6 +360,8 @@ namespace celestemeow
         {
             if (target == null) throw new ArgumentNullException(nameof(target));
             if (hook == null) throw new ArgumentNullException(nameof(hook));
+            if (target.ContainsGenericParameters)
+                throw new NotSupportedException("An On hook must target a closed generic method or type on iOS: " + target);
             ValidateHookSignature(target, hook.Method);
 
             lock (Sync)
@@ -395,6 +397,8 @@ namespace celestemeow
             if (target == null) throw new ArgumentNullException(nameof(target));
             if (hookMethod == null) throw new ArgumentNullException(nameof(hookMethod));
             if (identity == null) throw new ArgumentNullException(nameof(identity));
+            if (target.ContainsGenericParameters)
+                throw new NotSupportedException("A reflected On hook must target a closed generic method or type on iOS: " + target);
             if (!hookMethod.IsStatic && hookTarget == null)
                 throw new InvalidOperationException("An instance hook method requires a hook target.");
             ValidateHookSignature(target, hookMethod);
@@ -432,6 +436,8 @@ namespace celestemeow
             if (target == null) throw new ArgumentNullException(nameof(target));
             if (replacement == null) throw new ArgumentNullException(nameof(replacement));
             if (identity == null) throw new ArgumentNullException(nameof(identity));
+            if (target.ContainsGenericParameters)
+                throw new NotSupportedException("A detour must target a closed generic method or type on iOS: " + target);
 
             bool bindsOriginalInstance = !replacement.IsStatic && !target.IsStatic;
             ValidateDetourSignature(target, replacement, bindsOriginalInstance);
@@ -521,7 +527,20 @@ namespace celestemeow
             {
                 if (body == null) ModifiedBodies.Remove(target);
                 else ModifiedBodies[target] = body;
-                TypedDispatchCache.Remove(target);
+                foreach (MethodBase cachedTarget in TypedDispatchCache.Keys.ToArray())
+                {
+                    if (cachedTarget.Equals(target))
+                    {
+                        TypedDispatchCache.Remove(cachedTarget);
+                        continue;
+                    }
+                    try
+                    {
+                        if (IOSHookIdentity.GetDefinition(cachedTarget).Equals(target))
+                            TypedDispatchCache.Remove(cachedTarget);
+                    }
+                    catch { }
+                }
                 Registration[] hooks;
                 bool hasOnHooks = OnHooks.TryGetValue(target, out hooks) && hooks.Length > 0;
                 SetGateEnabled(target, hasOnHooks || body != null);
@@ -530,17 +549,61 @@ namespace celestemeow
 
         private static MethodInfo GetModifiedBody(MethodBase target)
         {
+            MethodInfo body;
             lock (Sync)
             {
-                MethodInfo body;
-                return ModifiedBodies.TryGetValue(target, out body) ? body : null;
+                if (!ModifiedBodies.TryGetValue(target, out body))
+                {
+                    MethodBase openGenericTarget = GetOpenGenericDefinition(target);
+                    if (openGenericTarget == null || !ModifiedBodies.TryGetValue(openGenericTarget, out body))
+                        return null;
+                }
             }
+            return CloseModifiedBodyForTarget(body, target);
+        }
+
+        private static MethodBase GetOpenGenericDefinition(MethodBase target)
+        {
+            MethodBase definition = IOSHookIdentity.GetDefinition(target);
+            return definition.Equals(target) ? null : definition;
+        }
+
+        private static MethodInfo CloseModifiedBodyForTarget(MethodInfo body, MethodBase target)
+        {
+            MethodInfo targetMethod = target as MethodInfo;
+            Type targetDeclaringType = target.DeclaringType;
+            if (body.DeclaringType.IsGenericTypeDefinition && targetDeclaringType.IsConstructedGenericType)
+            {
+                Type closedBodyType = body.DeclaringType.MakeGenericType(targetDeclaringType.GetGenericArguments());
+                body = closedBodyType.GetMethod(body.Name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                if (body == null) throw new MissingMethodException("The iOS IL sidecar lost its generated body for " + target + ".");
+            }
+            if (body.IsGenericMethodDefinition && targetMethod != null &&
+                targetMethod.IsGenericMethod && !targetMethod.IsGenericMethodDefinition)
+                body = body.MakeGenericMethod(targetMethod.GetGenericArguments());
+            if (body.ContainsGenericParameters && !target.ContainsGenericParameters)
+                throw new InvalidOperationException("The modified iOS IL body could not close its generic parameters for " + target + ".");
+            return body;
         }
 
         private static void SetGateEnabled(MethodBase target, bool enabled)
         {
             if (target is ConstructorInfo staticConstructor && staticConstructor.IsStatic)
                 return;
+            if (target.DeclaringType.ContainsGenericParameters)
+            {
+                Type stateType = target.Module.Assembly.GetType(IOSHookIdentity.GenericGateStateTypeFullName, false, false);
+                FieldInfo genericGate = stateType?.GetField(IOSHookIdentity.GenericOpenGateFieldName(target),
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                if (genericGate == null)
+                {
+                    if (enabled)
+                        throw new MissingFieldException("The iOS hook weave did not provide a shared generic gate for " + target + ".");
+                    return;
+                }
+                genericGate.SetValue(null, enabled);
+                return;
+            }
             string fieldName = IOSHookIdentity.GateFieldName(target);
             BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
             FieldInfo field = target.DeclaringType.GetField(fieldName, flags);
