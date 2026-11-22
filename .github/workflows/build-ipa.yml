@@ -30,7 +30,8 @@ jobs:
             9.0.x
 
       - name: Run typed hook compatibility smoke tests
-        run: dotnet run --configuration Release --project tools/IOSHookWeaver.SmokeTests/IOSHookWeaver.SmokeTests.csproj
+        working-directory: ${{ runner.temp }}
+        run: dotnet run --configuration Release --project "$GITHUB_WORKSPACE/tools/IOSHookWeaver.SmokeTests/IOSHookWeaver.SmokeTests.csproj"
 
       - name: Check required private secrets
         shell: bash
