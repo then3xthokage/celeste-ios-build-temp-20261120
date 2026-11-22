@@ -93,5 +93,13 @@
 
   <ItemGroup>
     <LinkerArgument Include="-lc++" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_tf_gettheorasize" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_tf_granpos_dec" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_tf_readaudio2" />
+    <LinkerArgument Include="-exported_symbol" />
+    <LinkerArgument Include="_tf_readvideo2" />
   </ItemGroup>
 </Project>

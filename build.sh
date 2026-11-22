@@ -758,6 +758,16 @@ if ! dotnet publish "$script_dir/celestemeow/ci-ios.csproj" \
 	exit 1
 fi
 
+ios_executable="$(find "$script_dir/celestemeow/bin" -type f -path '*/ci-ios.app/ci-ios' -print -quit)"
+if [ -z "$ios_executable" ]; then
+	error "the iOS app executable was not generated"
+	exit 1
+fi
+if ! python3 "$script_dir/tools/verify-ios-native-exports.py" "$ios_executable"; then
+	error "the iOS executable does not export all decoder symbols required by code mods"
+	exit 1
+fi
+
 info "moving built ipa to $script_dir"
 ipa_path="$(find "$script_dir/celestemeow/bin" -type f -name '*.ipa' -print -quit)"
 if [ -z "$ipa_path" ] || ! mv "$ipa_path" "$script_dir/celestemeow.ipa"; then error "failed to move ipa"; exit 1; fi

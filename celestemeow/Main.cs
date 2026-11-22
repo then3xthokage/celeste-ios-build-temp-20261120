@@ -274,6 +274,7 @@ namespace celestemeow
 #endif
         {
             TraceStartup("RealMain entered");
+            IOSNativeImports.EnsureRequiredImportsAreLinked();
             RegisterIOSClipboardDelegates();
             IOSHookRuntime.Initialize();
             string gameAssemblyPath = typeof(Celeste.Celeste).Assembly.Location;
