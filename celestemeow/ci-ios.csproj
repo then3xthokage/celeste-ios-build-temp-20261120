@@ -22,7 +22,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../tools/IOSHookWeaver/IOSHookWeaver.csproj" />
+    <Compile Include="../tools/IOSHookWeaver/Program.cs" Link="IOSHookWeaver.cs" />
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
     <PackageReference Include="YamlDotNet" Version="16.1.3" />
     <PackageReference Include="KeraLua" Version="1.4.7" />
