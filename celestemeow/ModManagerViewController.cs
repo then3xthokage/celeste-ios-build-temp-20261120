@@ -20,6 +20,7 @@ namespace celestemeow
         private UIButton playButton;
         private string currentPage = "installed";
         private bool startingGame;
+        private bool modActionInProgress;
 
         public ModManagerViewController(Action playGame)
         {
@@ -232,15 +233,23 @@ namespace celestemeow
             row.AddArrangedSubview(details);
 
             UISwitch enabled = new UISwitch { On = mod.Enabled, Enabled = mod.Supported };
-            enabled.ValueChanged += delegate
+            enabled.ValueChanged += async delegate
             {
+                if (!BeginModAction())
+                {
+                    enabled.SetState(mod.Enabled, true);
+                    return;
+                }
+                bool requestedState = enabled.On;
+                enabled.Enabled = false;
                 try
                 {
-                    List<string> alsoDisabled = IOSModLibrary.SetEnabled(mod.Name, enabled.On);
-                    string message = enabled.On
+                    IProgress<string> progress = new Progress<string>(message => SetStatus(message));
+                    List<string> alsoDisabled = await IOSModLibrary.SetEnabledAsync(mod.Name, requestedState, progress);
+                    string message = requestedState
                         ? mod.Name + " will be prepared when you play."
                         : mod.Name + " is disabled.";
-                    if (!enabled.On && alsoDisabled.Count > 0)
+                    if (!requestedState && alsoDisabled.Count > 0)
                         message += " Also disabled mods that require it: " + string.Join(", ", alsoDisabled) + ".";
                     ShowInstalled();
                     SetStatus(message);
@@ -248,7 +257,12 @@ namespace celestemeow
                 catch (Exception exception)
                 {
                     enabled.SetState(mod.Enabled, true);
+                    enabled.Enabled = true;
                     SetStatus(exception.Message, true);
+                }
+                finally
+                {
+                    EndModAction();
                 }
             };
             row.AddArrangedSubview(enabled);
@@ -257,20 +271,47 @@ namespace celestemeow
             {
                 UIAlertController alert = UIAlertController.Create("Remove mod?", "Remove " + mod.Name + " from this device?", UIAlertControllerStyle.Alert);
                 alert.AddAction(UIAlertAction.Create("Cancel", UIAlertActionStyle.Cancel, null));
-                alert.AddAction(UIAlertAction.Create("Remove", UIAlertActionStyle.Destructive, delegate
+                alert.AddAction(UIAlertAction.Create("Remove", UIAlertActionStyle.Destructive, async delegate
                 {
-                    List<string> alsoDisabled = IOSModLibrary.Remove(mod);
-                    ShowInstalled();
-                    string message = mod.Name + " was removed.";
-                    if (alsoDisabled.Count > 0)
-                        message += " Disabled mods that require it: " + string.Join(", ", alsoDisabled) + ".";
-                    SetStatus(message);
+                    if (!BeginModAction()) return;
+                    try
+                    {
+                        IProgress<string> progress = new Progress<string>(message => SetStatus(message));
+                        List<string> alsoDisabled = await IOSModLibrary.RemoveAsync(mod, progress);
+                        ShowInstalled();
+                        string message = mod.Name + " was removed.";
+                        if (alsoDisabled.Count > 0)
+                            message += " Disabled mods that require it: " + string.Join(", ", alsoDisabled) + ".";
+                        SetStatus(message);
+                    }
+                    catch (Exception exception)
+                    {
+                        SetStatus("Could not remove mod: " + exception.Message, true);
+                    }
+                    finally
+                    {
+                        EndModAction();
+                    }
                 }));
                 PresentViewController(alert, true, null);
             });
             remove.WidthAnchor.ConstraintEqualTo(86).Active = true;
             row.AddArrangedSubview(remove);
             return row;
+        }
+
+        private bool BeginModAction()
+        {
+            if (modActionInProgress || startingGame) return false;
+            modActionInProgress = true;
+            View.UserInteractionEnabled = false;
+            return true;
+        }
+
+        private void EndModAction()
+        {
+            modActionInProgress = false;
+            View.UserInteractionEnabled = true;
         }
 
         private async void BrowseCatalog(string query)

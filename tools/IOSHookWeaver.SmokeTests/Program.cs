@@ -462,6 +462,48 @@ Gamma: {}
         if (closure.Any(item => item.Name == "OptionalHelper"))
             throw new InvalidOperationException("Optional dependencies must not be installed as required dependencies.");
 
+        string graphCache = Path.Combine(Path.GetTempPath(), "CelesteIOSModGraph-" + Guid.NewGuid().ToString("N") + ".yaml");
+        try
+        {
+            File.WriteAllText(graphCache, graph);
+            ModDependencyResolver cached = ModDependencyResolver.LoadCached(graphCache);
+            System.Collections.Generic.List<ModDependency> cachedRequirements = new System.Collections.Generic.List<ModDependency>();
+            cached.ApplyTo("Root", cachedRequirements, new System.Collections.Generic.List<ModDependency>());
+            AssertEqual("Cached dependency graph loaded before manager actions", "True", cached.IsAvailable.ToString());
+            AssertEqual("Cached graph-only required dependency", "Alpha,beta", string.Join(",", cachedRequirements.Select(item => item.Name)));
+        }
+        finally
+        {
+            if (File.Exists(graphCache)) File.Delete(graphCache);
+        }
+
+        System.Collections.Generic.List<ModDependencyPackageState> packages = new System.Collections.Generic.List<ModDependencyPackageState>
+        {
+            new ModDependencyPackageState
+            {
+                PackageName = "Campaign",
+                ModuleNames = new System.Collections.Generic.List<string> { "Campaign" },
+                RequiredModuleNames = new System.Collections.Generic.List<string> { "Library" }
+            },
+            new ModDependencyPackageState
+            {
+                PackageName = "GameplayHelper",
+                ModuleNames = new System.Collections.Generic.List<string> { "GameplayHelper" },
+                RequiredModuleNames = new System.Collections.Generic.List<string> { "Campaign" }
+            },
+            new ModDependencyPackageState
+            {
+                PackageName = "Unrelated",
+                ModuleNames = new System.Collections.Generic.List<string> { "Unrelated" }
+            }
+        };
+        System.Collections.Generic.HashSet<string> enabledPackages = new System.Collections.Generic.HashSet<string>(
+            new[] { "Campaign", "GameplayHelper", "Unrelated" }, StringComparer.OrdinalIgnoreCase);
+        System.Collections.Generic.List<string> disabledPackages = ModDependencyResolver.DisableEnabledDependents(
+            new[] { "Library" }, packages, enabledPackages);
+        AssertEqual("Disable cascades through graph-only required dependencies", "Campaign,GameplayHelper", string.Join(",", disabledPackages));
+        AssertEqual("Unrelated mod remains enabled", "Unrelated", string.Join(",", enabledPackages));
+
         ModDependencyResolver cyclic = ModDependencyResolver.Parse(@"
 CycleA:
   Dependencies:

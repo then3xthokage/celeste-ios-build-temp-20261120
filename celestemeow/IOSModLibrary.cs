@@ -97,7 +97,7 @@ namespace celestemeow
         private static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "CelesteMods");
         private static readonly string ModsDirectory = Path.Combine(Root, "Mods");
         private static readonly string AutoUpdateSettingPath = Path.Combine(Root, "auto-update.txt");
-        private static ModDependencyResolver dependencyGraphCache = ModDependencyResolver.Empty;
+        private static ModDependencyResolver dependencyGraphCache = ModDependencyResolver.LoadCached(DependencyGraphCachePath());
 
         public static string ModsPath { get { return ModsDirectory; } }
         public static string DataPath { get { return Root; } }
@@ -333,8 +333,9 @@ namespace celestemeow
             }
         }
 
-        public static List<string> SetEnabled(string name, bool enabled)
+        public static async Task<List<string>> SetEnabledAsync(string name, bool enabled, IProgress<string> progress)
         {
+            await RefreshDependencyGraphAsync(progress);
             InstalledMod mod = GetInstalledMods().FirstOrDefault(item => string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase));
             if (mod == null) throw new FileNotFoundException("That mod is not installed.");
             HashSet<string> names = ReadEnabledNames();
@@ -357,35 +358,27 @@ namespace celestemeow
 
         private static List<string> DisableRequiredDependents(PackageInfo removedPackage, Dictionary<string, InstalledPackage> installed, HashSet<string> enabled)
         {
-            List<string> disabled = new List<string>();
-            HashSet<string> unavailableModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (ModMetadata module in removedPackage.Modules)
-                unavailableModules.Add(module.Name);
-
-            bool changed;
-            do
-            {
-                changed = false;
-                foreach (InstalledPackage candidate in installed.Values.Distinct())
+            List<ModDependencyPackageState> packages = installed.Values
+                .Distinct()
+                .Select(candidate => new ModDependencyPackageState
                 {
-                    if (!enabled.Contains(candidate.Package.Name)) continue;
-                    bool requiresRemovedPackage = candidate.Package.Modules.Any(module => module.Dependencies.Any(dependency =>
-                        dependency != null && unavailableModules.Contains(dependency.Name ?? "")));
-                    if (!requiresRemovedPackage) continue;
-
-                    enabled.Remove(candidate.Package.Name);
-                    disabled.Add(candidate.Package.Name);
-                    foreach (ModMetadata module in candidate.Package.Modules)
-                        unavailableModules.Add(module.Name);
-                    changed = true;
-                }
-            } while (changed);
-            return disabled.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    PackageName = candidate.Package.Name,
+                    ModuleNames = candidate.Package.Modules.Select(module => module.Name).ToList(),
+                    RequiredModuleNames = candidate.Package.Modules
+                        .SelectMany(module => module.Dependencies)
+                        .Where(dependency => dependency != null)
+                        .Select(dependency => dependency.Name)
+                        .ToList()
+                })
+                .ToList();
+            return ModDependencyResolver.DisableEnabledDependents(
+                removedPackage.Modules.Select(module => module.Name), packages, enabled);
         }
 
-        public static List<string> Remove(InstalledMod mod)
+        public static async Task<List<string>> RemoveAsync(InstalledMod mod, IProgress<string> progress)
         {
             if (mod == null) return new List<string>();
+            await RefreshDependencyGraphAsync(progress);
             Dictionary<string, InstalledPackage> installed = LoadInstalledPackages();
             InstalledPackage removedPackage;
             HashSet<string> names = ReadEnabledNames();
@@ -396,6 +389,14 @@ namespace celestemeow
             if (File.Exists(mod.Path)) File.Delete(mod.Path);
             SaveEnabledNames(names);
             return alsoDisabled;
+        }
+
+        private static async Task RefreshDependencyGraphAsync(IProgress<string> progress)
+        {
+            dependencyGraphCache = await ModDependencyResolver.DownloadEverestGraphAsync(
+                GetSmallTextAsync, progress, DependencyGraphCachePath());
+            if (!dependencyGraphCache.IsAvailable)
+                throw new IOException("Celeste couldn't verify the mod dependencies. Connect to the internet and try again; no enabled mods were changed.");
         }
 
         public static async Task<string> UpdateAllAsync(IProgress<string> progress)
@@ -509,9 +510,7 @@ namespace celestemeow
         private static async Task<List<string>> InstallRequiredDependenciesAsync(PackageInfo rootPackage, HashSet<string> enabled, IProgress<string> progress)
         {
             Directory.CreateDirectory(ModsDirectory);
-            dependencyGraphCache = await ModDependencyResolver.DownloadEverestGraphAsync(GetSmallTextAsync, progress, DependencyGraphCachePath());
-            if (!dependencyGraphCache.IsAvailable)
-                throw new IOException("Celeste couldn't verify the required mod list. Connect to the internet and try again.");
+            await RefreshDependencyGraphAsync(progress);
             ApplyDependencyGraph(rootPackage, dependencyGraphCache);
             Dictionary<string, InstalledPackage> installed = LoadInstalledPackages();
             Dictionary<string, UpdateInfo> catalog = HasUnsatisfiedDependencies(rootPackage, rootPackage, installed)

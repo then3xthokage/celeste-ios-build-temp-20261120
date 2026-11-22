@@ -21,6 +21,13 @@ namespace celestemeow
         public List<ModDependency> OptionalDependencies { get; set; } = new List<ModDependency>();
     }
 
+    internal sealed class ModDependencyPackageState
+    {
+        public string PackageName { get; set; }
+        public List<string> ModuleNames { get; set; } = new List<string>();
+        public List<string> RequiredModuleNames { get; set; } = new List<string>();
+    }
+
     /// <summary>
     /// Resolves package requirements using Everest's live graph plus each
     /// package's own manifest. It is deliberately keyed by mod name, so new
@@ -37,6 +44,19 @@ namespace celestemeow
             new Dictionary<string, DependencyCatalogEntry>(StringComparer.OrdinalIgnoreCase), false);
 
         public bool IsAvailable { get; private set; }
+
+        public static ModDependencyResolver LoadCached(string cachePath)
+        {
+            if (string.IsNullOrWhiteSpace(cachePath) || !File.Exists(cachePath)) return Empty;
+            try
+            {
+                return Parse(File.ReadAllText(cachePath));
+            }
+            catch
+            {
+                return Empty;
+            }
+        }
 
         private ModDependencyResolver(Dictionary<string, DependencyCatalogEntry> graph, bool isAvailable)
         {
@@ -216,6 +236,41 @@ namespace celestemeow
             if (roots != null)
                 foreach (ModDependency root in roots) visit(root);
             return order;
+        }
+
+        internal static List<string> DisableEnabledDependents(
+            IEnumerable<string> removedModuleNames,
+            IEnumerable<ModDependencyPackageState> packages,
+            HashSet<string> enabledPackages)
+        {
+            if (enabledPackages == null) throw new ArgumentNullException(nameof(enabledPackages));
+            List<ModDependencyPackageState> candidates = (packages ?? Enumerable.Empty<ModDependencyPackageState>())
+                .Where(package => package != null && !string.IsNullOrWhiteSpace(package.PackageName))
+                .GroupBy(package => package.PackageName, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToList();
+            HashSet<string> unavailable = new HashSet<string>(
+                (removedModuleNames ?? Enumerable.Empty<string>()).Where(name => !string.IsNullOrWhiteSpace(name)),
+                StringComparer.OrdinalIgnoreCase);
+            List<string> disabled = new List<string>();
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach (ModDependencyPackageState package in candidates)
+                {
+                    if (!enabledPackages.Contains(package.PackageName)) continue;
+                    if (!package.RequiredModuleNames.Any(unavailable.Contains)) continue;
+
+                    enabledPackages.Remove(package.PackageName);
+                    disabled.Add(package.PackageName);
+                    foreach (string moduleName in package.ModuleNames)
+                        if (!string.IsNullOrWhiteSpace(moduleName)) unavailable.Add(moduleName);
+                    changed = true;
+                }
+            } while (changed);
+
+            return disabled.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         private static void Merge(List<ModDependency> target, List<ModDependency> source)
