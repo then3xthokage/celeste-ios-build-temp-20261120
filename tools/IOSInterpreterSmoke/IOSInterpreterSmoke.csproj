@@ -15,10 +15,13 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
-    <PackageReference Include="KeraLua" Version="1.4.7" ExcludeAssets="native;build;buildTransitive" />
     <ProjectReference Include="../../Everest/external/MonoMod/src/MonoMod.Utils/MonoMod.Utils.csproj" />
     <Reference Include="NLua">
       <HintPath>../../Everest/external/NLua/lib/Release/net8.0/NLua.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="KeraLua">
+      <HintPath>$(NuGetPackageRoot)keralua/1.4.7/lib/net8.0/KeraLua.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <ProjectReference Include="ProbeFixture/ProbeFixture.csproj" ReferenceOutputAssembly="false" />
