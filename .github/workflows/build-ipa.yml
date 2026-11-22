@@ -29,6 +29,15 @@ jobs:
             8.0.428
             9.0.x
 
+      - name: Install Mono strong-name utility when needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v sn >/dev/null 2>&1; then
+            brew install mono
+          fi
+          command -v sn
+
       - name: Run typed hook compatibility smoke tests
         working-directory: ${{ runner.temp }}
         run: dotnet run --configuration Release --project "$GITHUB_WORKSPACE/tools/IOSHookWeaver.SmokeTests/IOSHookWeaver.SmokeTests.csproj"
@@ -189,15 +198,6 @@ jobs:
           fi
           dotnet --list-runtimes
           xcodebuild -version
-
-      - name: Install Mono strong-name utility when needed
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v sn >/dev/null 2>&1; then
-            brew install mono
-          fi
-          command -v sn
 
       - name: Identify native library cache version
         id: native-revisions
