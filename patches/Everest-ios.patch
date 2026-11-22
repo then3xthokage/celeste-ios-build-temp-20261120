@@ -345,10 +345,10 @@ index 5ab6d3d7..66ebdf53 100644
          }
  
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
-index 15b1c509..61289b9e 100644
+index 15b1c509..99c02240 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
-@@ -19,6 +19,74 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -19,10 +19,78 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
  
          private static ConcurrentDictionary<(MethodBase, Delegate), Hook> Hooks = new ConcurrentDictionary<(MethodBase, Delegate), Hook>();
          private static ConcurrentDictionary<(MethodBase, Delegate), ILHook> ILHooks = new ConcurrentDictionary<(MethodBase, Delegate), ILHook>();
@@ -423,6 +423,11 @@ index 15b1c509..61289b9e 100644
  
          private static bool IsEverestInternalMethod(MethodBase method) {
              for (Type type = method.DeclaringType; type != null; type = type.DeclaringType)
+-                if (type.Namespace.StartsWith("Celeste.Mod"))
++                if (type.Namespace != null && type.Namespace.StartsWith("Celeste.Mod", StringComparison.Ordinal))
+                     return true;
+ 
+             return false;
 @@ -45,6 +113,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
  
          public static void Add<T>(MethodBase method, Delegate hookDelegate) where T : Delegate => Add(method, hookDelegate);
@@ -477,6 +482,13 @@ index 15b1c509..61289b9e 100644
              foreach (Hook hook in Hooks.Values)
                  hook.Dispose();
              Hooks.Clear();
+@@ -100,4 +187,4 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             ILHooks.Clear();
+         }
+     }
+-}
+\ No newline at end of file
++}
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs
 index 1e53c174..470e5a15 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs

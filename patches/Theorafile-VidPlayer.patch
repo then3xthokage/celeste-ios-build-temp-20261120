@@ -1,0 +1,88 @@
+diff --git a/theorafile.c b/theorafile.c
+index c9315c6..eda97a9 100644
+--- a/theorafile.c
++++ b/theorafile.c
+@@ -539,7 +539,7 @@ void tf_reset(OggTheora_File *file)
+ 	file->eos = 0;
+ }
+ 
+-int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
++int tf_readvideo2(OggTheora_File *file, char *buffer, int numframes, ogg_int64_t *granpos_out)
+ {
+ 	int i;
+ 	char *dst = buffer;
+@@ -551,6 +551,10 @@ int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
+ 	unsigned char *plane;
+ 	int stride;
+ 	int retval = 0;
++	if (granpos_out != NULL)
++	{
++		*granpos_out = 0;
++	}
+ 
+ 	for (i = 0; i < numframes; i += 1)
+ 	{
+@@ -570,6 +574,10 @@ int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
+ 			&packet,
+ 			&granulepos
+ 		);
++		if (granpos_out != NULL)
++		{
++			*granpos_out = granulepos;
++		}
+ 
+ 		if (rc == 0) /* New frame! */
+ 		{
+@@ -638,6 +646,29 @@ int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
+ 	return retval;
+ }
+ 
++int tf_readvideo(OggTheora_File *file, char *buffer, int numframes)
++{
++	return tf_readvideo2(file, buffer, numframes, NULL);
++}
++
++void tf_granpos_dec(OggTheora_File *file, ogg_int64_t granpos, double *seconds, ogg_int64_t *frame)
++{
++	th_dec_ctx *decoder = file->tdec[file->ttrack];
++	if (seconds != NULL)
++	{
++		*seconds = th_granule_time(decoder, granpos);
++	}
++	if (frame != NULL)
++	{
++		*frame = th_granule_frame(decoder, granpos);
++	}
++}
++
++size_t tf_gettheorasize(void)
++{
++	return sizeof(OggTheora_File);
++}
++
+ int tf_readaudio(OggTheora_File *file, float *buffer, int samples)
+ {
+ 	int offset = 0;
+diff --git a/theorafile.h b/theorafile.h
+index 8a7d465..450ae79 100644
+--- a/theorafile.h
++++ b/theorafile.h
+@@ -30,6 +30,7 @@
+ 
+ #include <theora/theoradec.h>
+ #include <vorbis/codec.h>
++#include <stddef.h>
+ 
+ #ifdef __cplusplus
+ extern "C"
+@@ -135,6 +136,10 @@ DECLSPEC void tf_reset(OggTheora_File *file);
+  * Also, `samples` is not measured in frames!
+  */
+ DECLSPEC int tf_readvideo(OggTheora_File *file, char *buffer, int numframes);
++/* VidPlayer-compatible decoder helpers. */
++DECLSPEC int tf_readvideo2(OggTheora_File *file, char *buffer, int numframes, ogg_int64_t *granpos);
++DECLSPEC void tf_granpos_dec(OggTheora_File *file, ogg_int64_t granpos, double *seconds, ogg_int64_t *frame);
++DECLSPEC size_t tf_gettheorasize(void);
+ DECLSPEC int tf_readaudio(OggTheora_File *file, float *buffer, int samples);
+ 
+ /* Support for multiple audio tracks in a single file

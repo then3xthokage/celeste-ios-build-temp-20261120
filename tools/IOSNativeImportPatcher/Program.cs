@@ -12,7 +12,8 @@ internal static class Program
         ["SDL2"] = "__Internal",
         ["FNA3D"] = "__Internal",
         ["FAudio"] = "__Internal",
-        ["libtheorafile"] = "__Internal"
+        ["libtheorafile"] = "__Internal",
+        ["theorafilebun"] = "__Internal"
     };
 
     private static int Main(string[] args)

@@ -8,9 +8,54 @@ using System.Threading;
 using System.Linq.Expressions;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Runtime.Loader;
+using System.Runtime.CompilerServices;
+using Mono.Cecil;
+using Mono.Cecil.Cil;
 
 namespace celestemeow
 {
+    public sealed class IOSTypedHookInvocationState
+    {
+        public Delegate Hook;
+        public Delegate Original;
+    }
+
+    public sealed class IOSTypedContinuationState
+    {
+        public Delegate[] Chain;
+        public Delegate Original;
+        public int Index;
+    }
+
+    public sealed class IOSTypedDetourInvocationState
+    {
+        public MethodInfo Method;
+        public Type DelegateType;
+        private readonly ConditionalWeakTable<object, Delegate> delegates = new ConditionalWeakTable<object, Delegate>();
+
+        public Delegate GetBoundDelegate(object target)
+        {
+            if (target == null) throw new ArgumentNullException(nameof(target));
+            return delegates.GetValue(target, instance => Delegate.CreateDelegate(DelegateType, instance, Method, true));
+        }
+    }
+
+    public static class IOSTypedHookBridge
+    {
+        public static Delegate GetNext(IOSTypedContinuationState state)
+        {
+            if (state == null) throw new ArgumentNullException(nameof(state));
+            return state.Index < state.Chain.Length ? state.Chain[state.Index] : state.Original;
+        }
+
+        public static Delegate GetBoundDetour(IOSTypedDetourInvocationState state, object target)
+        {
+            if (state == null) throw new ArgumentNullException(nameof(state));
+            return state.GetBoundDelegate(target);
+        }
+    }
+
     /// <summary>
     /// Managed dispatch core for the iOS hook gates. The gates themselves are
     /// woven into Celeste.dll at build time, so this path never writes executable
@@ -19,6 +64,7 @@ namespace celestemeow
     internal static class IOSHookRuntime
     {
         internal const string DispatchDataKey = "Celeste.IOSHookRuntime.Dispatch";
+        internal const string TypedDispatchDataKey = "Celeste.IOSHookRuntime.DispatchTyped";
         internal const string AddOnDataKey = "Celeste.IOSHookRuntime.AddOn";
         internal const string RemoveOnDataKey = "Celeste.IOSHookRuntime.RemoveOn";
         internal const string AddReflectedOnDataKey = "Celeste.IOSHookRuntime.AddReflectedOn";
@@ -38,7 +84,10 @@ namespace celestemeow
         private static readonly Dictionary<MethodBase, Registration[]> OnHooks = new Dictionary<MethodBase, Registration[]>();
         private static readonly Dictionary<MethodBase, MethodInfo> ModifiedBodies = new Dictionary<MethodBase, MethodInfo>();
         private static readonly ConcurrentDictionary<MethodBase, MethodInfo> OriginalMethods = new ConcurrentDictionary<MethodBase, MethodInfo>();
+        private static readonly Dictionary<MethodBase, Dictionary<Type, Delegate>> TypedDispatchCache = new Dictionary<MethodBase, Dictionary<Type, Delegate>>();
+        private static readonly ConditionalWeakTable<AssemblyLoadContext, TypedAssemblyResolver> TypedResolvers = new ConditionalWeakTable<AssemblyLoadContext, TypedAssemblyResolver>();
         private static long nextSequence;
+        private static string gameAssemblyPath;
 
         private sealed class Registration
         {
@@ -53,6 +102,26 @@ namespace celestemeow
             public int SubPriority;
             public string[] Before;
             public string[] After;
+        }
+
+        private sealed class TypedAssemblyResolver
+        {
+            private readonly object sync = new object();
+            private readonly List<Assembly> preferredAssemblies = new List<Assembly>();
+
+            public void Add(Assembly assembly)
+            {
+                if (assembly == null) return;
+                lock (sync)
+                    if (!preferredAssemblies.Contains(assembly)) preferredAssemblies.Add(assembly);
+            }
+
+            public Assembly Resolve(AssemblyLoadContext context, AssemblyName requested)
+            {
+                Assembly[] preferred;
+                lock (sync) preferred = preferredAssemblies.ToArray();
+                return ResolveLoadedAssembly(requested.FullName, preferred);
+            }
         }
 
         private sealed class Invocation
@@ -246,6 +315,7 @@ namespace celestemeow
         {
             ConfigureMonoModCecilBackend();
             AppDomain.CurrentDomain.SetData(DispatchDataKey, (Func<MethodBase, object, object[], object>)Dispatch);
+            AppDomain.CurrentDomain.SetData(TypedDispatchDataKey, (Func<MethodBase, Type, Delegate>)DispatchTyped);
             AppDomain.CurrentDomain.SetData(AddOnDataKey, (Action<MethodBase, Delegate, object>)AddOn);
             AppDomain.CurrentDomain.SetData(RemoveOnDataKey, (Action<MethodBase, Delegate>)RemoveOn);
             AppDomain.CurrentDomain.SetData(AddReflectedOnDataKey, (Action<MethodBase, MethodInfo, object, object, object>)AddOnReflected);
@@ -277,6 +347,7 @@ namespace celestemeow
 
         internal static void ConfigureGameAssembly(string path)
         {
+            gameAssemblyPath = string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path);
             IOSILHookRuntime.ConfigureGameAssembly(path);
         }
 
@@ -299,6 +370,7 @@ namespace celestemeow
                 Registration registration = ReadRegistration(hook.Method, hook.Target, hook, config);
                 Registration[] next = chain.Concat(new[] { registration }).OrderBy(item => item.Sequence).ToArray();
                 OnHooks[target] = OrderByConfiguration(next);
+                TypedDispatchCache.Remove(target);
                 SetGateEnabled(target, true);
             }
         }
@@ -313,6 +385,7 @@ namespace celestemeow
                 Registration[] next = chain.Where(item => !ReferenceEquals(item.Identity, hook)).ToArray();
                 if (next.Length == 0) OnHooks.Remove(target);
                 else OnHooks[target] = next;
+                TypedDispatchCache.Remove(target);
                 SetGateEnabled(target, next.Length > 0 || ModifiedBodies.ContainsKey(target));
             }
         }
@@ -334,6 +407,7 @@ namespace celestemeow
                 Registration registration = ReadRegistration(hookMethod, hookTarget, identity, config);
                 Registration[] next = chain.Concat(new[] { registration }).ToArray();
                 OnHooks[target] = OrderByConfiguration(next);
+                TypedDispatchCache.Remove(target);
                 SetGateEnabled(target, true);
             }
         }
@@ -348,6 +422,7 @@ namespace celestemeow
                 Registration[] next = chain.Where(item => !ReferenceEquals(item.Identity, identity)).ToArray();
                 if (next.Length == 0) OnHooks.Remove(target);
                 else OnHooks[target] = next;
+                TypedDispatchCache.Remove(target);
                 SetGateEnabled(target, next.Length > 0 || ModifiedBodies.ContainsKey(target));
             }
         }
@@ -368,6 +443,7 @@ namespace celestemeow
                 Registration registration = ReadRegistration(replacement, null, identity, config);
                 registration.UseOriginalInstance = bindsOriginalInstance;
                 OnHooks[target] = OrderByConfiguration(chain.Concat(new[] { registration }).ToArray());
+                TypedDispatchCache.Remove(target);
                 SetGateEnabled(target, true);
             }
         }
@@ -412,6 +488,16 @@ namespace celestemeow
                 if (!OnHooks.TryGetValue(target, out chain)) chain = Array.Empty<Registration>();
                 index = Array.FindIndex(chain, item => ReferenceEquals(item.Identity, identity));
             }
+            string typedDelegateName = "CelesteIOS.Generated.__ios_typed_delegate_" + IOSHookIdentity.ForMethod(target);
+            Type wovenTypedDelegate = target.Module.Assembly.GetType(typedDelegateName, false, false);
+            if (wovenTypedDelegate != null)
+            {
+                Type expectedDelegate = GetTypedDelegateType(target);
+                if (!HaveSameTypedSignature(expectedDelegate, delegateType))
+                    throw new InvalidOperationException("The typed detour trampoline delegate does not match " + target + ".");
+                Delegate continuation = CreateTypedPipelineContinuation(target, expectedDelegate, chain, Math.Max(index + 1, 0));
+                return AdaptTypedDelegate(continuation, delegateType);
+            }
             if (index < 0) index = -1;
             MethodInfo original = OriginalMethods.GetOrAdd(target, FindOriginalMethod);
             return new Invocation(target, original, chain, null).CreateContinuation(delegateType, index + 1);
@@ -424,6 +510,7 @@ namespace celestemeow
                 foreach (MethodBase target in OnHooks.Keys.ToArray())
                     SetGateEnabled(target, ModifiedBodies.ContainsKey(target));
                 OnHooks.Clear();
+                TypedDispatchCache.Clear();
             }
             IOSILHookRuntime.Clear();
         }
@@ -434,6 +521,7 @@ namespace celestemeow
             {
                 if (body == null) ModifiedBodies.Remove(target);
                 else ModifiedBodies[target] = body;
+                TypedDispatchCache.Remove(target);
                 Registration[] hooks;
                 bool hasOnHooks = OnHooks.TryGetValue(target, out hooks) && hooks.Length > 0;
                 SetGateEnabled(target, hasOnHooks || body != null);
@@ -451,6 +539,8 @@ namespace celestemeow
 
         private static void SetGateEnabled(MethodBase target, bool enabled)
         {
+            if (target is ConstructorInfo staticConstructor && staticConstructor.IsStatic)
+                return;
             string fieldName = IOSHookIdentity.GateFieldName(target);
             BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
             FieldInfo field = target.DeclaringType.GetField(fieldName, flags);
@@ -588,6 +678,519 @@ namespace celestemeow
             return result;
         }
 
+        private static Delegate DispatchTyped(MethodBase target, Type delegateType)
+        {
+            if (target == null) throw new ArgumentNullException(nameof(target));
+            if (delegateType == null) throw new ArgumentNullException(nameof(delegateType));
+
+            lock (Sync)
+            {
+                Dictionary<Type, Delegate> byType;
+                if (TypedDispatchCache.TryGetValue(target, out byType))
+                {
+                    Delegate cached;
+                    if (byType.TryGetValue(delegateType, out cached)) return cached;
+                }
+
+                Type expectedType = GetTypedDelegateType(target);
+                if (expectedType == null || expectedType != delegateType)
+                    throw new InvalidOperationException("The typed iOS hook gate did not provide its generated signature delegate for " + target + ".");
+
+                Registration[] registrations;
+                if (!OnHooks.TryGetValue(target, out registrations)) registrations = Array.Empty<Registration>();
+                Delegate result = CreateTypedPipeline(target, delegateType, registrations);
+                if (byType == null)
+                {
+                    byType = new Dictionary<Type, Delegate>();
+                    TypedDispatchCache[target] = byType;
+                }
+                byType[delegateType] = result;
+                return result;
+            }
+        }
+
+        private static Delegate CreateTypedPipeline(MethodBase target, Type delegateType, Registration[] registrations)
+        {
+            return CreateTypedPipelineContinuation(target, delegateType, registrations, 0);
+        }
+
+        private static Delegate CreateTypedPipelineContinuation(MethodBase target, Type delegateType,
+            Registration[] registrations, int firstIndex)
+        {
+            MethodInfo delegateInvoke = delegateType.GetMethod("Invoke");
+            if (delegateInvoke == null) throw new InvalidOperationException("The generated typed hook signature has no Invoke method.");
+
+            MethodInfo modified = GetModifiedBody(target);
+            Delegate original;
+            if (modified != null)
+            {
+                MethodInfo originalMethod = modified;
+                if (originalMethod.IsStatic)
+                    original = Delegate.CreateDelegate(delegateType, originalMethod, true);
+                else
+                    original = Delegate.CreateDelegate(delegateType, null, originalMethod, true);
+            }
+            else
+            {
+                string adapterName = IOSHookIdentity.TypedOriginalAdapterName(target);
+                MethodInfo originalAdapter = target.DeclaringType.GetMethod(adapterName,
+                    BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static);
+                if (originalAdapter == null)
+                    throw new MissingMethodException("The iOS hook weave did not provide typed original adapter " + adapterName + " for " + target + ".");
+                if (target is MethodInfo targetMethod && targetMethod.IsGenericMethod && !targetMethod.IsGenericMethodDefinition)
+                    originalAdapter = originalAdapter.MakeGenericMethod(targetMethod.GetGenericArguments());
+                original = Delegate.CreateDelegate(delegateType, originalAdapter, true);
+            }
+
+            if (registrations.Length == 0 || firstIndex >= registrations.Length) return original;
+
+            Delegate[] chain = new Delegate[registrations.Length];
+            for (int index = registrations.Length - 1; index >= firstIndex; index--)
+            {
+                Registration registration = registrations[index];
+                Delegate hook = registration.Hook;
+                if (hook == null)
+                    hook = CreateTypedMethodDelegate(registration, target);
+
+                MethodInfo hookInvoke = hook.GetType().GetMethod("Invoke");
+                if (hookInvoke == null)
+                    throw new InvalidOperationException("Hook callback " + hook.GetType().FullName + " has no Invoke method.");
+                ParameterInfo[] hookParameters = hookInvoke.GetParameters();
+                ParameterInfo[] targetParameters = delegateInvoke.GetParameters();
+                bool hasOrig = hookParameters.Length == targetParameters.Length + 1 &&
+                    hookParameters.Length > 0 && typeof(Delegate).IsAssignableFrom(hookParameters[0].ParameterType);
+                int hookOffset = hasOrig ? 1 : 0;
+                if (hookParameters.Length != targetParameters.Length + hookOffset || hookInvoke.ReturnType != delegateInvoke.ReturnType)
+                    throw new InvalidOperationException("Hook callback signature does not match typed target " + target + ".");
+                for (int parameterIndex = 0; parameterIndex < targetParameters.Length; parameterIndex++)
+                    if (hookParameters[parameterIndex + hookOffset].ParameterType != targetParameters[parameterIndex].ParameterType)
+                        throw new InvalidOperationException("Hook callback parameter " + parameterIndex + " does not match typed target " + target + ".");
+
+                Delegate orig = null;
+                if (hasOrig)
+                {
+                    Type origType = hookParameters[0].ParameterType;
+                    IOSTypedContinuationState state = new IOSTypedContinuationState
+                    {
+                        Chain = chain,
+                        Original = original,
+                        Index = index + 1
+                    };
+                    MethodInfo continuation = CreateTypedContinuationMethod(target, delegateType, delegateInvoke);
+                    orig = Delegate.CreateDelegate(origType, state, continuation, true);
+                }
+
+                IOSTypedHookInvocationState hookState = new IOSTypedHookInvocationState
+                {
+                    Hook = hook,
+                    Original = orig
+                };
+                MethodInfo adapter = CreateTypedHookAdapterMethod(target, delegateType, delegateInvoke,
+                    hook.GetType(), hookInvoke, hasOrig);
+                chain[index] = Delegate.CreateDelegate(delegateType, hookState, adapter, true);
+            }
+
+            return chain[firstIndex];
+        }
+
+        private static bool HaveSameTypedSignature(Type expectedType, Type actualType)
+        {
+            MethodInfo expected = expectedType.GetMethod("Invoke");
+            MethodInfo actual = actualType.GetMethod("Invoke");
+            if (expected == null || actual == null || expected.ReturnType != actual.ReturnType ||
+                !SameCustomModifiers(expected.ReturnParameter, actual.ReturnParameter))
+                return false;
+
+            ParameterInfo[] expectedParameters = expected.GetParameters();
+            ParameterInfo[] actualParameters = actual.GetParameters();
+            if (expectedParameters.Length != actualParameters.Length) return false;
+            for (int index = 0; index < expectedParameters.Length; index++)
+                if (expectedParameters[index].ParameterType != actualParameters[index].ParameterType ||
+                    !SameCustomModifiers(expectedParameters[index], actualParameters[index]))
+                    return false;
+            return true;
+        }
+
+        private static bool SameCustomModifiers(ParameterInfo left, ParameterInfo right)
+        {
+            return left.GetRequiredCustomModifiers().SequenceEqual(right.GetRequiredCustomModifiers()) &&
+                left.GetOptionalCustomModifiers().SequenceEqual(right.GetOptionalCustomModifiers());
+        }
+
+        private static Delegate AdaptTypedDelegate(Delegate source, Type targetDelegateType)
+        {
+            if (source.GetType() == targetDelegateType) return source;
+            return Delegate.CreateDelegate(targetDelegateType, source.Target, source.Method, true);
+        }
+
+        private static MethodInfo CreateTypedContinuationMethod(MethodBase target, Type delegateType, MethodInfo delegateInvoke)
+        {
+            ParameterInfo[] delegateParameters = delegateInvoke.GetParameters();
+            string name = "TypedNext_" + IOSHookIdentity.ForMethod(target) + "_" + Interlocked.Increment(ref nextSequence);
+            return CreateGeneratedMethod(name, delegateInvoke.ReturnParameter,
+                new[] { typeof(IOSTypedContinuationState) }, delegateParameters, (module, method) =>
+            {
+                ILProcessor il = method.Body.GetILProcessor();
+                il.Append(il.Create(OpCodes.Ldarg_0));
+                MethodInfo getNext = typeof(IOSTypedHookBridge).GetMethod(nameof(IOSTypedHookBridge.GetNext), BindingFlags.Public | BindingFlags.Static);
+                il.Append(il.Create(OpCodes.Call, module.ImportReference(getNext)));
+                il.Append(il.Create(OpCodes.Castclass, module.ImportReference(delegateType)));
+                for (int index = 0; index < delegateParameters.Length; index++)
+                    il.Append(LoadCecilArgument(il, index + 1));
+                il.Append(il.Create(OpCodes.Callvirt, CreateRuntimeInstanceMethodReference(module, delegateType, delegateInvoke)));
+                il.Append(il.Create(OpCodes.Ret));
+            }, AssemblyLoadContext.GetLoadContext(target.Module.Assembly) ?? AssemblyLoadContext.Default,
+                delegateType.Assembly, typeof(IOSTypedHookBridge).Assembly);
+        }
+
+        private static MethodInfo CreateTypedHookAdapterMethod(MethodBase target, Type delegateType, MethodInfo delegateInvoke,
+            Type hookDelegateType, MethodInfo hookInvoke, bool hasOrig)
+        {
+            ParameterInfo[] delegateParameters = delegateInvoke.GetParameters();
+            string name = "TypedHook_" + IOSHookIdentity.ForMethod(target) + "_" + Interlocked.Increment(ref nextSequence);
+            return CreateGeneratedMethod(name, delegateInvoke.ReturnParameter,
+                new[] { typeof(IOSTypedHookInvocationState) }, delegateParameters, (module, method) =>
+            {
+                ILProcessor il = method.Body.GetILProcessor();
+                FieldInfo hookField = typeof(IOSTypedHookInvocationState).GetField(nameof(IOSTypedHookInvocationState.Hook));
+                FieldInfo origField = typeof(IOSTypedHookInvocationState).GetField(nameof(IOSTypedHookInvocationState.Original));
+                il.Append(il.Create(OpCodes.Ldarg_0));
+                il.Append(il.Create(OpCodes.Ldfld, module.ImportReference(hookField)));
+                il.Append(il.Create(OpCodes.Castclass, module.ImportReference(hookDelegateType)));
+                if (hasOrig)
+                {
+                    il.Append(il.Create(OpCodes.Ldarg_0));
+                    il.Append(il.Create(OpCodes.Ldfld, module.ImportReference(origField)));
+                    Type origType = hookInvoke.GetParameters()[0].ParameterType;
+                    il.Append(il.Create(OpCodes.Castclass, module.ImportReference(origType)));
+                }
+                for (int index = 0; index < delegateParameters.Length; index++)
+                    il.Append(LoadCecilArgument(il, index + 1));
+                il.Append(il.Create(OpCodes.Callvirt, CreateRuntimeInstanceMethodReference(module, hookDelegateType, hookInvoke)));
+                il.Append(il.Create(OpCodes.Ret));
+            }, AssemblyLoadContext.GetLoadContext(target.Module.Assembly) ?? AssemblyLoadContext.Default,
+                delegateType.Assembly, hookDelegateType.Assembly, typeof(IOSTypedHookInvocationState).Assembly);
+        }
+
+        private static MethodInfo CreateGeneratedMethod(string name, ParameterInfo returnParameter,
+            Type[] prefixParameterTypes, ParameterInfo[] parameters,
+            Action<ModuleDefinition, Mono.Cecil.MethodDefinition> buildBody,
+            AssemblyLoadContext loadContext, params Assembly[] preferredAssemblies)
+        {
+            AssemblyDefinition assembly = AssemblyDefinition.CreateAssembly(
+                new AssemblyNameDefinition("CelesteIOS.Typed." + name, new Version(1, 0, 0, 0)),
+                "CelesteIOS.Typed." + name,
+                ModuleKind.Dll);
+            ModuleDefinition module = assembly.MainModule;
+            TypeDefinition helper = new TypeDefinition(
+                "CelesteIOS.Generated",
+                "TypedAdapter_" + Guid.NewGuid().ToString("N"),
+                Mono.Cecil.TypeAttributes.Public | Mono.Cecil.TypeAttributes.Abstract |
+                Mono.Cecil.TypeAttributes.Sealed | Mono.Cecil.TypeAttributes.BeforeFieldInit,
+                module.ImportReference(typeof(object)));
+            module.Types.Add(helper);
+
+            Mono.Cecil.MethodDefinition method = new Mono.Cecil.MethodDefinition(
+                "Invoke",
+                Mono.Cecil.MethodAttributes.Public | Mono.Cecil.MethodAttributes.Static |
+                Mono.Cecil.MethodAttributes.HideBySig,
+                ImportRuntimeParameterSignature(module, returnParameter));
+            foreach (Type parameterType in prefixParameterTypes)
+                method.Parameters.Add(new ParameterDefinition(ImportRuntimeSignatureType(module, parameterType)));
+            foreach (ParameterInfo parameter in parameters)
+                method.Parameters.Add(new ParameterDefinition(parameter.Name,
+                    (Mono.Cecil.ParameterAttributes)parameter.Attributes,
+                    ImportRuntimeParameterSignature(module, parameter)));
+            method.Body = new Mono.Cecil.Cil.MethodBody(method) { InitLocals = true, MaxStackSize = 16 };
+            helper.Methods.Add(method);
+            buildBody(module, method);
+
+            IEnumerable<Assembly> signatureAssemblies = parameters
+                .SelectMany(parameter => new[] { parameter.ParameterType.Assembly }
+                    .Concat(parameter.GetRequiredCustomModifiers().Select(type => type.Assembly))
+                    .Concat(parameter.GetOptionalCustomModifiers().Select(type => type.Assembly)))
+                .Concat(new[] { returnParameter.ParameterType.Assembly })
+                .Concat(returnParameter.GetRequiredCustomModifiers().Select(type => type.Assembly))
+                .Concat(returnParameter.GetOptionalCustomModifiers().Select(type => type.Assembly));
+            Assembly loaded = LoadGeneratedAssembly(assembly, loadContext,
+                (preferredAssemblies ?? Array.Empty<Assembly>()).Concat(signatureAssemblies).Distinct().ToArray());
+            Type helperType = loaded.GetType(helper.FullName, true, false);
+            return helperType.GetMethod(method.Name, BindingFlags.Public | BindingFlags.Static);
+        }
+
+        private static TypeReference ImportRuntimeSignatureType(ModuleDefinition module, Type type)
+        {
+            if (type.IsByRef) return new ByReferenceType(ImportRuntimeSignatureType(module, type.GetElementType()));
+            if (type.IsPointer) return new PointerType(ImportRuntimeSignatureType(module, type.GetElementType()));
+            if (type.IsArray) return new ArrayType(ImportRuntimeSignatureType(module, type.GetElementType()), type.GetArrayRank());
+            if (type.IsFunctionPointer)
+            {
+                FunctionPointerType functionPointer = new FunctionPointerType
+                {
+                    HasThis = false,
+                    ExplicitThis = false,
+                    CallingConvention = RuntimeFunctionPointerCallingConvention(type),
+                    ReturnType = ImportRuntimeSignatureType(module, type.GetFunctionPointerReturnType())
+                };
+                foreach (Type parameterType in type.GetFunctionPointerParameterTypes())
+                    functionPointer.Parameters.Add(new ParameterDefinition(ImportRuntimeSignatureType(module, parameterType)));
+                return functionPointer;
+            }
+            return module.ImportReference(type);
+        }
+
+        private static MethodReference CreateRuntimeInstanceMethodReference(ModuleDefinition module, Type declaringType, MethodInfo method)
+        {
+            if (!ContainsRuntimeFunctionPointer(method.ReturnType) &&
+                !method.GetParameters().Any(parameter => ContainsRuntimeFunctionPointer(parameter.ParameterType)))
+                return module.ImportReference(method);
+
+            MethodReference reference = new MethodReference(method.Name,
+                ImportRuntimeParameterSignature(module, method.ReturnParameter),
+                module.ImportReference(declaringType))
+            {
+                HasThis = !method.IsStatic,
+                ExplicitThis = false,
+                CallingConvention = MethodCallingConvention.Default
+            };
+            foreach (ParameterInfo parameter in method.GetParameters())
+                reference.Parameters.Add(new ParameterDefinition(parameter.Name,
+                    (Mono.Cecil.ParameterAttributes)parameter.Attributes,
+                    ImportRuntimeParameterSignature(module, parameter)));
+            return reference;
+        }
+
+        private static bool ContainsRuntimeFunctionPointer(Type type)
+        {
+            if (type.IsFunctionPointer) return true;
+            if (type.HasElementType) return ContainsRuntimeFunctionPointer(type.GetElementType());
+            return type.IsGenericType && type.GetGenericArguments().Any(ContainsRuntimeFunctionPointer);
+        }
+
+        private static MethodCallingConvention RuntimeFunctionPointerCallingConvention(Type type)
+        {
+            if (!type.IsUnmanagedFunctionPointer) return MethodCallingConvention.Default;
+            foreach (Type convention in type.GetFunctionPointerCallingConventions())
+            {
+                if (convention.Name == "CallConvCdecl") return MethodCallingConvention.C;
+                if (convention.Name == "CallConvStdcall") return MethodCallingConvention.StdCall;
+                if (convention.Name == "CallConvThiscall") return MethodCallingConvention.ThisCall;
+                if (convention.Name == "CallConvFastcall") return MethodCallingConvention.FastCall;
+            }
+            return MethodCallingConvention.Unmanaged;
+        }
+
+        private static Assembly LoadGeneratedAssembly(AssemblyDefinition assembly, AssemblyLoadContext loadContext,
+            params Assembly[] preferredAssemblies)
+        {
+            using (MemoryStream stream = new MemoryStream())
+            {
+                assembly.Write(stream);
+                stream.Position = 0;
+                TypedAssemblyResolver typedResolver = TypedResolvers.GetValue(loadContext, context =>
+                {
+                    TypedAssemblyResolver created = new TypedAssemblyResolver();
+                    context.Resolving += created.Resolve;
+                    return created;
+                });
+                if (preferredAssemblies != null)
+                    foreach (Assembly preferred in preferredAssemblies)
+                        typedResolver.Add(preferred);
+                ResolveEventHandler appDomainResolver = (sender, args) => ResolveLoadedAssembly(args.Name, preferredAssemblies);
+                AppDomain.CurrentDomain.AssemblyResolve += appDomainResolver;
+                try
+                {
+                    return loadContext.LoadFromStream(stream);
+                }
+                finally
+                {
+                    AppDomain.CurrentDomain.AssemblyResolve -= appDomainResolver;
+                }
+            }
+        }
+
+        private static Delegate CreateTypedMethodDelegate(Registration registration, MethodBase target)
+        {
+            if (registration.UseOriginalInstance && !registration.HookMethod.IsStatic)
+                return CreateTypedInstanceDetour(registration, target);
+
+            Type delegateType = CreateDelegateTypeForMethod(registration.HookMethod);
+            return registration.HookMethod.IsStatic
+                ? Delegate.CreateDelegate(delegateType, (MethodInfo)registration.HookMethod, true)
+                : Delegate.CreateDelegate(delegateType, registration.HookTarget, (MethodInfo)registration.HookMethod, true);
+        }
+
+        private static Delegate CreateTypedInstanceDetour(Registration registration, MethodBase target)
+        {
+            Type delegateType = GetTypedDelegateType(target);
+            MethodInfo delegateInvoke = delegateType.GetMethod("Invoke");
+            ParameterInfo[] targetParameters = delegateInvoke.GetParameters();
+            if (target.IsStatic || targetParameters.Length == 0)
+                throw new NotSupportedException("A typed instance detour requires an instance target: " + target + ".");
+
+            Type instanceParameter = targetParameters[0].ParameterType;
+            if (instanceParameter.IsByRef)
+            {
+                Type instanceType = instanceParameter.GetElementType();
+                if (instanceType == registration.HookMethod.DeclaringType &&
+                    (instanceType.IsValueType || instanceType.IsByRefLike))
+                {
+                    // A boxed struct would lose the caller's mutable this. An
+                    // open instance delegate instead receives the original
+                    // by-reference this pointer and invokes the replacement
+                    // with the exact typed signature generated for the target.
+                    return Delegate.CreateDelegate(delegateType, null, registration.HookMethod, true);
+                }
+                throw new NotSupportedException("A typed value-type detour must be an instance method on the target value type: " + target + ".");
+            }
+            if (instanceParameter.IsValueType || instanceParameter.IsByRefLike)
+                throw new NotSupportedException("Typed instance detours require an explicit by-reference target instance: " + target + ".");
+
+            Type replacementDelegateType = CreateDelegateTypeForMethod(registration.HookMethod);
+            IOSTypedDetourInvocationState state = new IOSTypedDetourInvocationState
+            {
+                Method = registration.HookMethod,
+                DelegateType = replacementDelegateType
+            };
+
+            Type[] adapterPrefixParameters = new[] { typeof(IOSTypedDetourInvocationState) };
+            string name = "TypedInstanceDetour_" + IOSHookIdentity.ForMethod(target) + "_" + Interlocked.Increment(ref nextSequence);
+            MethodInfo adapter = CreateGeneratedMethod(name, delegateInvoke.ReturnParameter,
+                adapterPrefixParameters, targetParameters, (module, method) =>
+            {
+                ILProcessor il = method.Body.GetILProcessor();
+                il.Append(il.Create(OpCodes.Ldarg_0));
+                il.Append(il.Create(OpCodes.Ldarg_1));
+                MethodInfo getBound = typeof(IOSTypedHookBridge).GetMethod(nameof(IOSTypedHookBridge.GetBoundDetour), BindingFlags.Public | BindingFlags.Static);
+                il.Append(il.Create(OpCodes.Call, module.ImportReference(getBound)));
+                il.Append(il.Create(OpCodes.Castclass, module.ImportReference(replacementDelegateType)));
+                for (int index = 1; index < targetParameters.Length; index++)
+                    il.Append(LoadCecilArgument(il, index + 1));
+                il.Append(il.Create(OpCodes.Callvirt, CreateRuntimeInstanceMethodReference(module, replacementDelegateType,
+                    replacementDelegateType.GetMethod("Invoke"))));
+                il.Append(il.Create(OpCodes.Ret));
+            }, AssemblyLoadContext.GetLoadContext(target.Module.Assembly) ?? AssemblyLoadContext.Default,
+                delegateType.Assembly, replacementDelegateType.Assembly, typeof(IOSTypedHookBridge).Assembly);
+
+            return Delegate.CreateDelegate(delegateType, state, adapter, true);
+        }
+
+        private static Type GetTypedDelegateType(MethodBase target)
+        {
+            string name = "CelesteIOS.Generated.__ios_typed_delegate_" + IOSHookIdentity.ForMethod(target);
+            Type delegateType = target.Module.Assembly.GetType(name, false, false);
+            if (delegateType == null)
+                throw new InvalidOperationException("The typed iOS hook gate did not provide its generated signature delegate for " + target + ".");
+            if (delegateType.IsGenericTypeDefinition)
+            {
+                Type[] declaringArguments = target.DeclaringType != null && target.DeclaringType.IsGenericType
+                    ? target.DeclaringType.GetGenericArguments()
+                    : Type.EmptyTypes;
+                Type[] methodArguments = target is MethodInfo method && method.IsGenericMethod
+                    ? method.GetGenericArguments()
+                    : Type.EmptyTypes;
+                Type[] arguments = declaringArguments.Concat(methodArguments).ToArray();
+                if (arguments.Length != delegateType.GetGenericArguments().Length)
+                    throw new InvalidOperationException("The typed iOS hook signature generic arity does not match " + target + ".");
+                delegateType = delegateType.MakeGenericType(arguments);
+            }
+            return delegateType;
+        }
+
+        private static Type CreateDelegateTypeForMethod(MethodInfo method)
+        {
+            AssemblyLoadContext loadContext = AssemblyLoadContext.GetLoadContext(method.Module.Assembly) ?? AssemblyLoadContext.Default;
+            string unique = Interlocked.Increment(ref nextSequence).ToString();
+            string assemblyName = "CelesteIOS.TypedHookDelegate." + unique;
+            AssemblyDefinition assembly = AssemblyDefinition.CreateAssembly(
+                new AssemblyNameDefinition(assemblyName, new Version(1, 0, 0, 0)), assemblyName, ModuleKind.Dll);
+            ModuleDefinition module = assembly.MainModule;
+            TypeDefinition delegateType = new TypeDefinition(
+                "CelesteIOS.Generated",
+                "ReflectedHookDelegate_" + unique,
+                Mono.Cecil.TypeAttributes.Public | Mono.Cecil.TypeAttributes.Sealed |
+                Mono.Cecil.TypeAttributes.Class | Mono.Cecil.TypeAttributes.AnsiClass |
+                Mono.Cecil.TypeAttributes.AutoClass,
+                module.ImportReference(typeof(MulticastDelegate)));
+            module.Types.Add(delegateType);
+
+            Mono.Cecil.MethodDefinition constructor = new Mono.Cecil.MethodDefinition(
+                ".ctor",
+                Mono.Cecil.MethodAttributes.Public | Mono.Cecil.MethodAttributes.HideBySig |
+                Mono.Cecil.MethodAttributes.SpecialName | Mono.Cecil.MethodAttributes.RTSpecialName,
+                module.TypeSystem.Void)
+            {
+                ImplAttributes = Mono.Cecil.MethodImplAttributes.Runtime | Mono.Cecil.MethodImplAttributes.Managed,
+                HasThis = true
+            };
+            constructor.Parameters.Add(new ParameterDefinition("target", Mono.Cecil.ParameterAttributes.None, module.TypeSystem.Object));
+            constructor.Parameters.Add(new ParameterDefinition("method", Mono.Cecil.ParameterAttributes.None, module.TypeSystem.IntPtr));
+            delegateType.Methods.Add(constructor);
+
+            Mono.Cecil.MethodDefinition invoke = new Mono.Cecil.MethodDefinition(
+                "Invoke",
+                Mono.Cecil.MethodAttributes.Public | Mono.Cecil.MethodAttributes.HideBySig |
+                Mono.Cecil.MethodAttributes.NewSlot | Mono.Cecil.MethodAttributes.Virtual,
+                ImportRuntimeParameterSignature(module, method.ReturnParameter))
+            {
+                ImplAttributes = Mono.Cecil.MethodImplAttributes.Runtime | Mono.Cecil.MethodImplAttributes.Managed,
+                HasThis = true
+            };
+            foreach (ParameterInfo parameter in method.GetParameters())
+                invoke.Parameters.Add(new ParameterDefinition(parameter.Name, (Mono.Cecil.ParameterAttributes)parameter.Attributes,
+                    ImportRuntimeParameterSignature(module, parameter)));
+            delegateType.Methods.Add(invoke);
+
+            Assembly[] dependencies = method.GetParameters().SelectMany(parameter =>
+                    new[] { parameter.ParameterType.Assembly }.Concat(parameter.GetRequiredCustomModifiers().Select(type => type.Assembly))
+                        .Concat(parameter.GetOptionalCustomModifiers().Select(type => type.Assembly)))
+                .Concat(new[] { method.ReturnType.Assembly, method.Module.Assembly })
+                .Concat(method.ReturnParameter.GetRequiredCustomModifiers().Select(type => type.Assembly))
+                .Concat(method.ReturnParameter.GetOptionalCustomModifiers().Select(type => type.Assembly))
+                .Distinct().ToArray();
+            Assembly loaded = LoadGeneratedAssembly(assembly, loadContext, dependencies);
+            return loaded.GetType(delegateType.FullName, true, false);
+        }
+
+        private static TypeReference ImportRuntimeParameterSignature(ModuleDefinition module, ParameterInfo parameter)
+        {
+            TypeReference type = ImportRuntimeSignatureType(module, parameter.ParameterType);
+            foreach (Type modifier in parameter.GetRequiredCustomModifiers())
+                type = new RequiredModifierType(module.ImportReference(modifier), type);
+            foreach (Type modifier in parameter.GetOptionalCustomModifiers())
+                type = new OptionalModifierType(module.ImportReference(modifier), type);
+            return type;
+        }
+
+        private static Assembly ResolveLoadedAssembly(string requestedName, Assembly[] preferredAssemblies)
+        {
+            AssemblyName requested;
+            try { requested = new AssemblyName(requestedName); }
+            catch { return null; }
+
+            if (preferredAssemblies != null)
+                foreach (Assembly preferred in preferredAssemblies)
+                    if (preferred != null && AssemblyName.ReferenceMatchesDefinition(requested, preferred.GetName()))
+                        return preferred;
+
+            foreach (Assembly loaded in AppDomain.CurrentDomain.GetAssemblies())
+                if (AssemblyName.ReferenceMatchesDefinition(requested, loaded.GetName()))
+                    return loaded;
+            return null;
+        }
+
+        private static Instruction LoadCecilArgument(ILProcessor il, int index)
+        {
+            switch (index)
+            {
+                case 0: return il.Create(OpCodes.Ldarg_0);
+                case 1: return il.Create(OpCodes.Ldarg_1);
+                case 2: return il.Create(OpCodes.Ldarg_2);
+                case 3: return il.Create(OpCodes.Ldarg_3);
+                default: return il.Create(OpCodes.Ldarg, (short)index);
+            }
+        }
+
         private static MethodInfo FindOriginalMethod(MethodBase target)
         {
             MethodInfo method = target as MethodInfo;
@@ -674,6 +1277,15 @@ namespace celestemeow
         {
             if (target == null) throw new ArgumentNullException(nameof(target));
             if (delegateType == null) throw new ArgumentNullException(nameof(delegateType));
+            string typedDelegateName = "CelesteIOS.Generated.__ios_typed_delegate_" + IOSHookIdentity.ForMethod(target);
+            if (target.Module.Assembly.GetType(typedDelegateName, false, false) != null)
+            {
+                Type expectedDelegate = GetTypedDelegateType(target);
+                if (!HaveSameTypedSignature(expectedDelegate, delegateType))
+                    throw new InvalidOperationException("The typed original delegate does not match " + target + ".");
+                Delegate originalTyped = CreateTypedPipelineContinuation(target, expectedDelegate, Array.Empty<Registration>(), 0);
+                return AdaptTypedDelegate(originalTyped, delegateType);
+            }
             MethodInfo original = OriginalMethods.GetOrAdd(target, FindOriginalMethod);
             return new Invocation(target, original, Array.Empty<Registration>(), null)
                 .CreateContinuation(delegateType, 0);
@@ -685,7 +1297,18 @@ namespace celestemeow
             int woven;
             string[] skipped;
             string resolverDirectory = string.IsNullOrWhiteSpace(assemblyPath) ? null : Path.GetDirectoryName(assemblyPath);
-            byte[] result = global::IOSHookWeaver.WeaveAssembly(bytes, out assemblyName, out woven, out skipped, resolverDirectory);
+            List<string> additionalResolverDirectories = new List<string> { AppContext.BaseDirectory };
+            if (!string.IsNullOrWhiteSpace(gameAssemblyPath))
+                additionalResolverDirectories.Add(Path.GetDirectoryName(gameAssemblyPath));
+            foreach (Assembly loadedAssembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                string location = null;
+                try { location = loadedAssembly.Location; } catch { }
+                if (!string.IsNullOrWhiteSpace(location) && File.Exists(location))
+                    additionalResolverDirectories.Add(Path.GetDirectoryName(location));
+            }
+            byte[] result = global::IOSHookWeaver.WeaveAssembly(bytes, out assemblyName, out woven, out skipped,
+                resolverDirectory, additionalResolverDirectories, IOSILHookRuntime.GetAssemblySnapshotImages());
             if (woven > 0)
                 Console.WriteLine("iOS hook backend wove " + woven + " methods in mod assembly " + assemblyName + ".");
             if (skipped.Length > 0)

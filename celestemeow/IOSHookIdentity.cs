@@ -23,7 +23,7 @@ namespace celestemeow
             string signature = definition.Module.Assembly.GetName().Name + "|" +
                 TypeName(declaringType) + "|" + (definition.IsStatic ? "static" : "instance") + "|" +
                 definition.Name + "|" + GenericArity(definition) + "|" +
-                ReturnType(definition) + "(" + string.Join(",", definition.GetParameters().Select(parameter => TypeName(parameter.ParameterType))) + ")";
+                ReturnType(definition) + "(" + string.Join(",", definition.GetParameters().Select(SignatureTypeName)) + ")";
             return Hash(signature);
         }
 
@@ -40,9 +40,11 @@ namespace celestemeow
         internal static string GateFieldName(MethodBase method) => "__ios_hooked_" + ForMethod(method);
         internal static string OriginalMethodName(MethodBase method) => "__ios_original_" + ForMethod(method);
         internal static string ValueTypeInvokerName(MethodBase method) => "__ios_original_static_" + ForMethod(method);
+        internal static string TypedOriginalAdapterName(MethodBase method) => "__ios_typed_original_" + ForMethod(method);
         internal static string GateFieldName(MethodDefinition method) => "__ios_hooked_" + ForMethod(method);
         internal static string OriginalMethodName(MethodDefinition method) => "__ios_original_" + ForMethod(method);
         internal static string ValueTypeInvokerName(MethodDefinition method) => "__ios_original_static_" + ForMethod(method);
+        internal static string TypedOriginalAdapterName(MethodDefinition method) => "__ios_typed_original_" + ForMethod(method);
 
         private static MethodBase GetDefinition(MethodBase method)
         {
@@ -65,7 +67,19 @@ namespace celestemeow
 
         private static string ReturnType(MethodBase method)
         {
-            return method is MethodInfo info ? TypeName(info.ReturnType) : "System.Void";
+            return method is MethodInfo info ? SignatureTypeName(info.ReturnParameter) : "System.Void";
+        }
+
+        private static string SignatureTypeName(ParameterInfo parameter)
+        {
+            string result = TypeName(parameter.ParameterType);
+            Type[] required = parameter.GetRequiredCustomModifiers();
+            Type[] optional = parameter.GetOptionalCustomModifiers();
+            if (required.Length > 0)
+                result += " " + string.Join(" ", required.Select(modifier => "modreq(" + TypeName(modifier) + ")"));
+            if (optional.Length > 0)
+                result += " " + string.Join(" ", optional.Select(modifier => "modopt(" + TypeName(modifier) + ")"));
+            return result;
         }
 
         private static int GenericArity(MethodBase method)
@@ -77,12 +91,20 @@ namespace celestemeow
         {
             if (type.IsByRef) return TypeName(type.GetElementType()) + "&";
             if (type.IsPointer) return TypeName(type.GetElementType()) + "*";
+            if (type.IsFunctionPointer)
+            {
+                Type[] parameters = type.GetFunctionPointerParameterTypes();
+                return FunctionPointerConvention(type) + TypeName(type.GetFunctionPointerReturnType()) +
+                    "(" + string.Join(",", parameters.Select(TypeName)) + ")";
+            }
             if (type.IsArray) return TypeName(type.GetElementType()) + "[" + new string(',', type.GetArrayRank() - 1) + "]";
             if (type.IsGenericParameter)
                 return (type.DeclaringMethod == null ? "!" : "!!") + type.GenericParameterPosition;
             if (type.IsGenericType)
             {
                 Type definition = type.GetGenericTypeDefinition();
+                if (type.IsGenericTypeDefinition)
+                    return NormalizeTypeName(definition.FullName);
                 return NormalizeTypeName(definition.FullName) + "<" +
                     string.Join(",", type.GetGenericArguments().Select(TypeName)) + ">";
             }
@@ -93,6 +115,11 @@ namespace celestemeow
         {
             if (type is ByReferenceType byReference) return TypeName(byReference.ElementType) + "&";
             if (type is PointerType pointer) return TypeName(pointer.ElementType) + "*";
+            if (type is FunctionPointerType functionPointer)
+            {
+                return FunctionPointerConvention(functionPointer) + TypeName(functionPointer.ReturnType) +
+                    "(" + string.Join(",", functionPointer.Parameters.Select(parameter => TypeName(parameter.ParameterType))) + ")";
+            }
             if (type is ArrayType array) return TypeName(array.ElementType) + "[" + new string(',', array.Rank - 1) + "]";
             if (type is GenericParameter parameter)
                 return (parameter.Type == GenericParameterType.Type ? "!" : "!!") + parameter.Position;
@@ -104,6 +131,34 @@ namespace celestemeow
             if (type is PinnedType pinned) return TypeName(pinned.ElementType) + " pinned";
             if (type is SentinelType sentinel) return TypeName(sentinel.ElementType) + " sentinel";
             return NormalizeTypeName(type.FullName);
+        }
+
+        private static string FunctionPointerConvention(Type type)
+        {
+            if (!type.IsUnmanagedFunctionPointer) return "managed:";
+            return "unmanaged[" + string.Join(",", type.GetFunctionPointerCallingConventions()
+                .Select(convention => convention.Name).OrderBy(name => name, StringComparer.Ordinal)) + "]:";
+        }
+
+        private static string FunctionPointerConvention(FunctionPointerType type)
+        {
+            switch (type.CallingConvention)
+            {
+                case MethodCallingConvention.Default:
+                    return "managed:";
+                case MethodCallingConvention.C:
+                    return "unmanaged[CallConvCdecl]:";
+                case MethodCallingConvention.StdCall:
+                    return "unmanaged[CallConvStdcall]:";
+                case MethodCallingConvention.ThisCall:
+                    return "unmanaged[CallConvThiscall]:";
+                case MethodCallingConvention.FastCall:
+                    return "unmanaged[CallConvFastcall]:";
+                case MethodCallingConvention.VarArg:
+                    return "unmanaged[vararg]:";
+                default:
+                    return "unmanaged[" + type.CallingConvention + "]:";
+            }
         }
 
         private static string NormalizeTypeName(string name)

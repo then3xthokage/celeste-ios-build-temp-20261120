@@ -17,14 +17,94 @@ using FieldInfo = System.Reflection.FieldInfo;
 public static class IOSHookWeaver
 {
     private const string DispatchKey = "Celeste.IOSHookRuntime.Dispatch";
+    private const string TypedDispatchKey = "Celeste.IOSHookRuntime.DispatchTyped";
     private static readonly Dictionary<string, string> IOSStaticLibraries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["SDL2"] = "__Internal",
         ["FNA3D"] = "__Internal",
         ["FAudio"] = "__Internal",
-        ["libtheorafile"] = "__Internal"
+        ["libtheorafile"] = "__Internal",
+        ["theorafilebun"] = "__Internal"
     };
     private static readonly ConcurrentDictionary<ReflectionGetterKey, Delegate> ReflectionGetters = new ConcurrentDictionary<ReflectionGetterKey, Delegate>();
+
+    private sealed class IOSAssemblyResolver : DefaultAssemblyResolver
+    {
+        private readonly object sync = new object();
+        private readonly Dictionary<string, byte[]> images = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, AssemblyDefinition> loaded = new Dictionary<string, AssemblyDefinition>(StringComparer.OrdinalIgnoreCase);
+
+        public IOSAssemblyResolver(IEnumerable<KeyValuePair<string, byte[]>> assemblyImages)
+        {
+            if (assemblyImages == null) return;
+            foreach (KeyValuePair<string, byte[]> image in assemblyImages)
+                if (!string.IsNullOrWhiteSpace(image.Key) && image.Value != null && !images.ContainsKey(image.Key))
+                    images.Add(image.Key, image.Value);
+        }
+
+        public override AssemblyDefinition Resolve(AssemblyNameReference name)
+        {
+            AssemblyDefinition imageAssembly = ResolveImage(name);
+            return imageAssembly ?? base.Resolve(name);
+        }
+
+        public override AssemblyDefinition Resolve(AssemblyNameReference name, ReaderParameters parameters)
+        {
+            AssemblyDefinition imageAssembly = ResolveImage(name);
+            if (imageAssembly != null) return imageAssembly;
+            if (parameters == null)
+                parameters = new ReaderParameters { AssemblyResolver = this, InMemory = true, ReadingMode = ReadingMode.Deferred };
+            return base.Resolve(name, parameters);
+        }
+
+        private AssemblyDefinition ResolveImage(AssemblyNameReference name)
+        {
+            if (name != null && images.TryGetValue(name.Name, out byte[] image))
+            {
+                lock (sync)
+                {
+                    if (loaded.TryGetValue(name.FullName, out AssemblyDefinition cached)) return cached;
+                    ReaderParameters reader = new ReaderParameters
+                    {
+                        AssemblyResolver = this,
+                        InMemory = true,
+                        ReadingMode = ReadingMode.Deferred,
+                        ReadSymbols = false
+                    };
+                    AssemblyDefinition candidate = AssemblyDefinition.ReadAssembly(new MemoryStream(image, false), reader);
+                    if (IdentityMatches(name, candidate.Name))
+                    {
+                        loaded[name.FullName] = candidate;
+                        return candidate;
+                    }
+                    candidate.Dispose();
+                }
+            }
+            return null;
+        }
+
+        private static bool IdentityMatches(AssemblyNameReference requested, AssemblyNameDefinition actual)
+        {
+            if (!string.Equals(requested.Name, actual.Name, StringComparison.OrdinalIgnoreCase)) return false;
+            if (requested.Version != null && requested.Version != actual.Version) return false;
+            if (!string.IsNullOrWhiteSpace(requested.Culture) &&
+                !string.Equals(requested.Culture, actual.Culture, StringComparison.OrdinalIgnoreCase)) return false;
+            byte[] requestedToken = requested.PublicKeyToken;
+            byte[] actualToken = actual.PublicKeyToken;
+            return requestedToken == null || requestedToken.Length == 0 ||
+                (actualToken != null && requestedToken.SequenceEqual(actualToken));
+        }
+
+        public new void Dispose()
+        {
+            lock (sync)
+            {
+                foreach (AssemblyDefinition assembly in loaded.Values) assembly.Dispose();
+                loaded.Clear();
+            }
+            base.Dispose();
+        }
+    }
 
     private readonly struct ReflectionGetterKey : IEquatable<ReflectionGetterKey>
     {
@@ -104,9 +184,9 @@ public static class IOSHookWeaver
 #if !__IOS__
     private static int Main(string[] args)
     {
-        if (args.Length != 2)
+        if (args.Length < 2)
         {
-            Console.Error.WriteLine("Usage: IOSHookWeaver <input-assembly> <output-assembly>");
+            Console.Error.WriteLine("Usage: IOSHookWeaver <input-assembly> <output-assembly> [resolver-directory ...]");
             return 2;
         }
 
@@ -116,7 +196,8 @@ public static class IOSHookWeaver
         string assemblyName;
         int woven;
         string[] skipped;
-        byte[] result = WeaveAssembly(File.ReadAllBytes(input), out assemblyName, out woven, out skipped, Path.GetDirectoryName(input));
+        byte[] result = WeaveAssembly(File.ReadAllBytes(input), out assemblyName, out woven, out skipped,
+            Path.GetDirectoryName(input), args.Skip(2).Where(Directory.Exists));
         string outputDirectory = Path.GetDirectoryName(output);
         if (!string.IsNullOrEmpty(outputDirectory)) Directory.CreateDirectory(outputDirectory);
         string temporary = output + ".tmp";
@@ -125,17 +206,20 @@ public static class IOSHookWeaver
         Console.WriteLine("Wove " + woven + " methods from " + assemblyName + ".");
         if (skipped.Length > 0)
         {
-            Console.WriteLine("Skipped " + skipped.Length + " methods whose signatures cannot be represented by object-based hook dispatch:");
+            Console.WriteLine("Skipped " + skipped.Length + " methods that remain unhookable on this iOS backend:");
             foreach (string method in skipped) Console.WriteLine("  " + method);
         }
         return 0;
     }
 #endif
 
-    public static byte[] WeaveAssembly(byte[] input, out string assemblyName, out int woven, out string[] skippedMethods, string resolverDirectory = null)
+    public static byte[] WeaveAssembly(byte[] input, out string assemblyName, out int woven, out string[] skippedMethods,
+        string resolverDirectory = null, IEnumerable<string> additionalResolverDirectories = null,
+        IEnumerable<KeyValuePair<string, byte[]>> inMemoryAssemblies = null)
     {
         if (input == null) throw new ArgumentNullException(nameof(input));
-        DefaultAssemblyResolver resolver = new DefaultAssemblyResolver();
+        using (IOSAssemblyResolver resolver = new IOSAssemblyResolver(inMemoryAssemblies))
+        {
         if (!string.IsNullOrWhiteSpace(resolverDirectory) && Directory.Exists(resolverDirectory))
         {
             resolver.AddSearchDirectory(resolverDirectory);
@@ -150,6 +234,9 @@ public static class IOSHookWeaver
                 AddResolverDirectory(resolver, Path.Combine(parent.FullName, "Everest", "lib-ext"));
             }
         }
+        if (additionalResolverDirectories != null)
+            foreach (string directory in additionalResolverDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
+                AddResolverDirectory(resolver, directory);
         resolver.AddSearchDirectory(AppContext.BaseDirectory);
         using (AssemblyDefinition assembly = AssemblyDefinition.ReadAssembly(new MemoryStream(input, false), new ReaderParameters
         {
@@ -163,25 +250,41 @@ public static class IOSHookWeaver
         }))
         using (MemoryStream output = new MemoryStream())
         {
-            HashSet<MethodDefinition> directNativeMethods = PatchIOSNativeImports(assembly.MainModule, assembly.Name.Name);
+            PatchIOSNativeImports(assembly.MainModule, assembly.Name.Name);
+            if (string.Equals(assembly.Name.Name, "TextCopy", StringComparison.OrdinalIgnoreCase))
+                PatchTextCopyClipboard(assembly.MainModule);
             if (string.Equals(assembly.Name.Name, "DJMapHelper", StringComparison.OrdinalIgnoreCase))
-                PatchDjMapHelper(assembly.MainModule);
+                PatchFastReflectionFieldGetter(assembly.MainModule, "Celeste.Mod.DJMapHelper.Extensions.FastReflection");
+            if (string.Equals(assembly.Name.Name, "CeilingUltra", StringComparison.OrdinalIgnoreCase))
+                PatchFastReflectionFieldGetter(assembly.MainModule, "Celeste.Mod.CeilingUltra.Utils.FastReflection");
+            if (string.Equals(assembly.Name.Name, "ChroniaHelper", StringComparison.OrdinalIgnoreCase))
+                PatchIOSExternalLinks(assembly.MainModule);
 
             List<string> skipped = new List<string>();
             int count = 0;
-            foreach (TypeDefinition type in AllTypes(assembly.MainModule.Types))
+            foreach (TypeDefinition type in AllTypes(assembly.MainModule.Types).ToArray())
             foreach (MethodDefinition method in type.Methods.ToArray())
             {
-                string reason = directNativeMethods.Contains(method)
-                    ? "rewritten native compatibility method remains direct"
-                    : GetSkipReason(method);
+                string reason = GetSkipReason(method);
                 if (reason != null)
                 {
-                    if (method.HasBody && !method.IsConstructor && !method.IsAbstract && !method.IsPInvokeImpl)
+                    if (!IsBackendGeneratedMethod(method) && method.HasBody && method.Body != null &&
+                        method.Body.Instructions.Count > 0 && !method.IsAbstract && !method.IsPInvokeImpl)
                         skipped.Add(method.FullName + " :: " + reason);
                     continue;
                 }
-                if (IsAlreadyWoven(method)) continue;
+                if (IsAlreadyWoven(method))
+                {
+                    if (RequiresTypedDispatch(method) &&
+                        !type.Methods.Any(candidate => candidate.Name == IOSHookIdentity.TypedOriginalAdapterName(method)))
+                    {
+                        MethodDefinition existingOriginal = type.Methods.FirstOrDefault(candidate =>
+                            candidate.Name == IOSHookIdentity.OriginalMethodName(method));
+                        if (existingOriginal != null)
+                            CreateTypedOriginalAdapter(method, existingOriginal, IOSHookIdentity.TypedOriginalAdapterName(method));
+                    }
+                    continue;
+                }
                 Weave(method);
                 count++;
             }
@@ -192,11 +295,11 @@ public static class IOSHookWeaver
             skippedMethods = skipped.ToArray();
             return output.ToArray();
         }
+        }
     }
 
-    private static HashSet<MethodDefinition> PatchIOSNativeImports(ModuleDefinition module, string assemblyName)
+    private static void PatchIOSNativeImports(ModuleDefinition module, string assemblyName)
     {
-        HashSet<MethodDefinition> directNativeMethods = new HashSet<MethodDefinition>();
         Dictionary<string, ModuleReference> moduleReferences = module.ModuleReferences
             .GroupBy(reference => reference.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
@@ -234,7 +337,6 @@ public static class IOSHookWeaver
                 il.Append(il.Create(OpCodes.Ret));
                 body.MaxStackSize = 3;
                 ConvertPInvokeMethodToManaged(method, body);
-                directNativeMethods.Add(method);
                 colorImportCount++;
                 continue;
             }
@@ -254,7 +356,6 @@ public static class IOSHookWeaver
 
         if (staticImportCount > 0 || colorImportCount > 0)
             Console.WriteLine("Applied iOS native compatibility rewrites to " + assemblyName + ": static imports=" + staticImportCount + ", ColorHLSToRGB=" + colorImportCount + ".");
-        return directNativeMethods;
     }
 
     private static void ConvertPInvokeMethodToManaged(MethodDefinition method, MethodBody body)
@@ -266,6 +367,40 @@ public static class IOSHookWeaver
             .Where(attribute => attribute.AttributeType.FullName == "System.Runtime.InteropServices.DllImportAttribute")
             .ToArray())
             method.CustomAttributes.Remove(attribute);
+        method.Body = body;
+    }
+
+    private static void PatchTextCopyClipboard(ModuleDefinition module)
+    {
+        TypeDefinition clipboard = AllTypes(module.Types).FirstOrDefault(type => type.FullName == "TextCopy.ClipboardService");
+        if (clipboard == null)
+            throw new InvalidDataException("TextCopy assembly identity is present but TextCopy.ClipboardService is missing; its iOS clipboard compatibility rewrite needs review.");
+
+        PatchClipboardFactory(clipboard, "CreateGet", "System.Func" + (char)96 + "1<System.String>", "Celeste.IOSClipboard.GetText");
+        PatchClipboardFactory(clipboard, "CreateSet", "System.Action" + (char)96 + "1<System.String>", "Celeste.IOSClipboard.SetText");
+        PatchClipboardFactory(clipboard, "CreateAsyncGet",
+            "System.Func" + (char)96 + "2<System.Threading.CancellationToken,System.Threading.Tasks.Task" + (char)96 + "1<System.String>>",
+            "Celeste.IOSClipboard.GetTextAsync");
+        PatchClipboardFactory(clipboard, "CreateAsyncSet",
+            "System.Func" + (char)96 + "3<System.String,System.Threading.CancellationToken,System.Threading.Tasks.Task>",
+            "Celeste.IOSClipboard.SetTextAsync");
+        Console.WriteLine("Applied iOS clipboard delegates to TextCopy.");
+    }
+
+    private static void PatchClipboardFactory(TypeDefinition clipboard, string methodName, string expectedReturnType, string dataKey)
+    {
+        MethodDefinition method = clipboard.Methods.SingleOrDefault(candidate => candidate.Name == methodName);
+        if (method == null || !method.IsStatic || method.Parameters.Count != 0 || method.ReturnType.FullName != expectedReturnType)
+            throw new InvalidDataException("TextCopy.ClipboardService." + methodName +
+                " changed shape; the iOS clipboard compatibility rewrite needs review.");
+
+        MethodBody body = new MethodBody(method) { MaxStackSize = 2 };
+        ILProcessor il = body.GetILProcessor();
+        il.Append(il.Create(OpCodes.Call, CreateCurrentDomainGetter(method.Module)));
+        il.Append(il.Create(OpCodes.Ldstr, dataKey));
+        il.Append(il.Create(OpCodes.Callvirt, CreateGetData(method.Module)));
+        il.Append(il.Create(OpCodes.Castclass, method.ReturnType));
+        il.Append(il.Create(OpCodes.Ret));
         method.Body = body;
     }
 
@@ -308,15 +443,14 @@ public static class IOSHookWeaver
         return (hue * (mid2 - mid1) + 20) / 40 + mid1;
     }
 
-    private static void PatchDjMapHelper(ModuleDefinition module)
+    private static void PatchFastReflectionFieldGetter(ModuleDefinition module, string typeName)
     {
-        TypeDefinition type = AllTypes(module.Types).FirstOrDefault(candidate =>
-            candidate.FullName == "Celeste.Mod.DJMapHelper.Extensions.FastReflection");
+        TypeDefinition type = AllTypes(module.Types).FirstOrDefault(candidate => candidate.FullName == typeName);
         MethodDefinition method = type?.Methods.FirstOrDefault(candidate =>
             candidate.Name == "CreateGetDelegateImpl" && candidate.HasGenericParameters && candidate.GenericParameters.Count == 2);
         if (method == null || method.Parameters.Count != 2 || method.Parameters[0].ParameterType.FullName != "System.Type" ||
             method.Parameters[1].ParameterType.MetadataType != MetadataType.String || method.ReturnType.MetadataType == MetadataType.Void)
-            throw new InvalidDataException("DJMapHelper's FastReflection.CreateGetDelegateImpl signature changed; its iOS DynamicMethod compatibility rewrite must be reviewed.");
+            throw new InvalidDataException(typeName + ".CreateGetDelegateImpl changed shape; its iOS DynamicMethod compatibility rewrite needs review.");
 
         MethodBody body = new MethodBody(method);
         ILProcessor il = body.GetILProcessor();
@@ -335,7 +469,50 @@ public static class IOSHookWeaver
         il.Append(il.Create(OpCodes.Castclass, method.ReturnType));
         il.Append(il.Create(OpCodes.Ret));
         method.Body = body;
-        Console.WriteLine("Applied the iOS reflection-backed field getter rewrite to DJMapHelper.");
+        Console.WriteLine("Applied the iOS reflection-backed field getter rewrite to " + module.Assembly.Name.Name + ".");
+    }
+
+    private static void PatchIOSExternalLinks(ModuleDefinition module)
+    {
+        MethodReference helper = module.ImportReference(typeof(IOSHookWeaver).GetMethod(
+            nameof(OpenExternalProcessIOS), BindingFlags.Public | BindingFlags.Static));
+        int patched = 0;
+        foreach (TypeDefinition type in AllTypes(module.Types))
+        foreach (MethodDefinition method in type.Methods)
+        {
+            if (!method.HasBody) continue;
+            foreach (Instruction instruction in method.Body.Instructions)
+            {
+                if ((instruction.OpCode != OpCodes.Call && instruction.OpCode != OpCodes.Callvirt) ||
+                    !(instruction.Operand is MethodReference target) ||
+                    target.DeclaringType.FullName != "System.Diagnostics.Process" ||
+                    target.Name != "Start" || target.Parameters.Count != 1 ||
+                    target.Parameters[0].ParameterType.FullName != "System.Diagnostics.ProcessStartInfo" ||
+                    target.ReturnType.FullName != "System.Diagnostics.Process")
+                    continue;
+
+                if (instruction.Next == null || instruction.Next.OpCode != OpCodes.Pop)
+                    throw new InvalidDataException("ChroniaHelper uses Process.Start's return value; its iOS external-link rewrite needs review.");
+                instruction.OpCode = OpCodes.Call;
+                instruction.Operand = helper;
+                patched++;
+            }
+        }
+        Console.WriteLine("Applied iOS external-link handling to ChroniaHelper: " + patched + " call(s).");
+    }
+
+    public static object OpenExternalProcessIOS(object startInfo)
+    {
+        if (startInfo == null) return null;
+        System.Reflection.PropertyInfo fileNameProperty = startInfo.GetType().GetProperty("FileName");
+        string fileName = fileNameProperty?.GetValue(startInfo, null) as string;
+        if (!Uri.TryCreate(fileName, UriKind.Absolute, out Uri uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            return null;
+
+        Action<string> openUrl = AppDomain.CurrentDomain.GetData("Celeste.IOSExternalLinks.OpenUrl") as Action<string>;
+        openUrl?.Invoke(uri.AbsoluteUri);
+        return null;
     }
 
     private static void AddResolverDirectory(DefaultAssemblyResolver resolver, string directory)
@@ -354,30 +531,68 @@ public static class IOSHookWeaver
 
     private static string GetSkipReason(MethodDefinition method)
     {
+        if (IsBackendGeneratedMethod(method))
+            return "generated iOS hook backend method remains direct";
         // MonoMod's portable DMD backend calls these methods through a closed
         // generic self type. Keeping this tiny dispatch trampoline unmodified
         // avoids an AOT generic handle edge case while preserving the original
         // generated-code backend behavior.
         if (method.DeclaringType.FullName == "MonoMod.Utils.DMDGenerator`1" && method.Name == "Generate")
             return "MonoMod DMD generic dispatch stays direct for AOT generic method compatibility";
-        if (!method.HasBody || method.Body == null || method.IsAbstract || method.IsPInvokeImpl)
+        if (!method.HasBody || method.Body == null || method.Body.Instructions.Count == 0 ||
+            method.IsAbstract || method.IsPInvokeImpl)
             return "method has no movable managed body";
-        if (method.IsConstructor && method.IsStatic)
-            return "static constructors cannot be gated before type initialization";
-        if (method.IsConstructor && FindConstructorChainCall(method) < 0)
+        if (method.IsConstructor && !method.IsStatic && !method.DeclaringType.IsValueType && FindConstructorChainCall(method) < 0)
             return "constructor chain call is not a straight-line base/this initializer";
         if (method.CallingConvention == MethodCallingConvention.VarArg) return "varargs cannot be boxed for managed dispatch";
-        if (method.ReturnType.IsByReference) return "managed-reference return values cannot cross the object dispatch boundary";
-        if (ContainsUnsupportedType(method.ReturnType)) return "return value cannot be boxed for managed dispatch";
-        if (method.HasParameters && method.Parameters.Any(parameter => ContainsUnsupportedType(parameter.ParameterType)))
-            return "one or more parameters cannot be boxed for managed dispatch";
+        bool requiresTypedDispatch = RequiresTypedDispatch(method);
+        if (requiresTypedDispatch && !CanUseTypedDispatch(method))
+            return "signature requires a typed adapter but contains open generic parameters";
         return null;
+    }
+
+    private static bool IsBackendGeneratedMethod(MethodDefinition method)
+    {
+        return method.Name.StartsWith("__ios_original_", StringComparison.Ordinal) ||
+            method.Name.StartsWith("__ios_original_static_", StringComparison.Ordinal) ||
+            method.Name.StartsWith("__ios_typed_original_", StringComparison.Ordinal);
+    }
+
+    private static bool RequiresTypedDispatch(MethodDefinition method)
+    {
+        return IsByReferenceSignatureType(method.ReturnType) || ContainsUnsupportedType(method.ReturnType) ||
+            method.HasParameters && method.Parameters.Any(parameter => ContainsUnsupportedType(parameter.ParameterType));
+    }
+
+    private static bool IsByReferenceSignatureType(TypeReference type)
+    {
+        while (true)
+        {
+            if (type is OptionalModifierType optional)
+            {
+                type = optional.ElementType;
+                continue;
+            }
+            if (type is RequiredModifierType required)
+            {
+                type = required.ElementType;
+                continue;
+            }
+            return type is ByReferenceType;
+        }
+    }
+
+    private static bool CanUseTypedDispatch(MethodDefinition method)
+    {
+        return method.CallingConvention != MethodCallingConvention.VarArg &&
+            !(method.IsConstructor && method.IsStatic);
     }
 
     private static bool ContainsUnsupportedType(TypeReference type)
     {
         if (type is ByReferenceType byReference) return ContainsUnsupportedType(byReference.ElementType);
-        if (type is GenericInstanceType generic) return generic.GenericArguments.Any(ContainsUnsupportedType);
+        if (type is GenericInstanceType generic)
+            return generic.ElementType.IsByReferenceLike() || generic.GenericArguments.Any(ContainsUnsupportedType);
         if (type is ArrayType array) return ContainsUnsupportedType(array.ElementType);
         if (type is OptionalModifierType optional) return ContainsUnsupportedType(optional.ElementType);
         if (type is RequiredModifierType required) return ContainsUnsupportedType(required.ElementType);
@@ -401,8 +616,14 @@ public static class IOSHookWeaver
         string originalName = "__ios_original_" + id;
         string gateName = "__ios_hooked_" + id;
 
+        TypeDefinition typedDelegate = RequiresTypedDispatch(method)
+            ? CreateTypedDelegateType(method, "__ios_typed_delegate_" + id)
+            : null;
+
         int constructorChainIndex = method.IsConstructor ? FindConstructorChainCall(method) : -1;
         MethodDefinition original = CloneOriginal(method, originalName);
+        if (typedDelegate != null)
+            CreateTypedOriginalAdapter(method, original, IOSHookIdentity.TypedOriginalAdapterName(method));
         if (constructorChainIndex >= 0)
         {
             for (int i = 0; i <= constructorChainIndex; i++)
@@ -416,10 +637,195 @@ public static class IOSHookWeaver
             FieldAttributes.Private | FieldAttributes.Static,
             method.Module.TypeSystem.Boolean);
         type.Fields.Add(gate);
-        MethodBody gateBody = CreateGateBody(method, original, gate);
+        MethodBody gateBody = typedDelegate == null
+            ? CreateGateBody(method, original, gate)
+            : CreateTypedGateBody(method, original, gate, typedDelegate);
         if (constructorChainIndex >= 0)
             PrependConstructorChainCall(method, gateBody, constructorChainIndex);
         method.Body = gateBody;
+    }
+
+    private static TypeDefinition CreateTypedDelegateType(MethodDefinition method, string name)
+    {
+        ModuleDefinition module = method.Module;
+        TypeDefinition delegateType = new TypeDefinition(
+            "CelesteIOS.Generated",
+            name,
+            Mono.Cecil.TypeAttributes.Public | Mono.Cecil.TypeAttributes.Sealed |
+            Mono.Cecil.TypeAttributes.Class | Mono.Cecil.TypeAttributes.AnsiClass |
+            Mono.Cecil.TypeAttributes.AutoClass,
+            module.ImportReference(typeof(MulticastDelegate)));
+        module.Types.Add(delegateType);
+
+        Dictionary<GenericParameter, GenericParameter> genericMap = new Dictionary<GenericParameter, GenericParameter>();
+        GenericParameter[] sourceGenericParameters = method.DeclaringType.GenericParameters.Concat(method.GenericParameters).ToArray();
+        foreach (GenericParameter source in sourceGenericParameters)
+        {
+            GenericParameter clone = new GenericParameter("T" + delegateType.GenericParameters.Count, delegateType)
+            {
+                Attributes = source.Attributes
+            };
+            delegateType.GenericParameters.Add(clone);
+            genericMap.Add(source, clone);
+        }
+        foreach (GenericParameter source in sourceGenericParameters)
+        {
+            GenericParameter clone = genericMap[source];
+            foreach (GenericParameterConstraint constraint in source.Constraints)
+                clone.Constraints.Add(new GenericParameterConstraint(ImportTypedSignatureType(module, constraint.ConstraintType, method, genericMap)));
+        }
+
+        MethodDefinition constructor = new MethodDefinition(
+            ".ctor",
+            Mono.Cecil.MethodAttributes.Public | Mono.Cecil.MethodAttributes.HideBySig |
+            Mono.Cecil.MethodAttributes.SpecialName | Mono.Cecil.MethodAttributes.RTSpecialName,
+            module.TypeSystem.Void)
+        {
+            ImplAttributes = Mono.Cecil.MethodImplAttributes.Runtime | Mono.Cecil.MethodImplAttributes.Managed,
+            HasThis = true
+        };
+        constructor.Parameters.Add(new ParameterDefinition("target", Mono.Cecil.ParameterAttributes.None, module.TypeSystem.Object));
+        constructor.Parameters.Add(new ParameterDefinition("method", Mono.Cecil.ParameterAttributes.None, module.TypeSystem.IntPtr));
+        delegateType.Methods.Add(constructor);
+
+        MethodDefinition invoke = new MethodDefinition(
+            "Invoke",
+            Mono.Cecil.MethodAttributes.Public | Mono.Cecil.MethodAttributes.HideBySig |
+            Mono.Cecil.MethodAttributes.NewSlot | Mono.Cecil.MethodAttributes.Virtual,
+            ImportTypedSignatureType(module, method.ReturnType, method, genericMap))
+        {
+            ImplAttributes = Mono.Cecil.MethodImplAttributes.Runtime | Mono.Cecil.MethodImplAttributes.Managed,
+            HasThis = true
+        };
+        if (!method.IsStatic)
+        {
+            TypeReference instanceType;
+            if (method.DeclaringType.HasGenericParameters)
+            {
+                GenericInstanceType self = new GenericInstanceType(module.ImportReference(method.DeclaringType));
+                foreach (GenericParameter parameter in method.DeclaringType.GenericParameters)
+                    self.GenericArguments.Add(genericMap[parameter]);
+                instanceType = self;
+            }
+            else
+                instanceType = module.ImportReference(method.DeclaringType, method);
+            if (method.DeclaringType.IsValueType)
+                instanceType = new ByReferenceType(instanceType);
+            invoke.Parameters.Add(new ParameterDefinition("instance", Mono.Cecil.ParameterAttributes.None, instanceType));
+        }
+        foreach (ParameterDefinition parameter in method.Parameters)
+            invoke.Parameters.Add(new ParameterDefinition(parameter.Name, parameter.Attributes,
+                ImportTypedSignatureType(module, parameter.ParameterType, method, genericMap)));
+        delegateType.Methods.Add(invoke);
+        return delegateType;
+    }
+
+    private static MethodDefinition CreateTypedOriginalAdapter(MethodDefinition source, MethodDefinition original, string name)
+    {
+        MethodDefinition adapter = new MethodDefinition(name,
+            MethodAttributes.Private | MethodAttributes.Static | MethodAttributes.HideBySig,
+            source.Module.TypeSystem.Void)
+        {
+            ImplAttributes = MethodImplAttributes.IL | MethodImplAttributes.Managed
+        };
+        source.DeclaringType.Methods.Add(adapter);
+
+        Dictionary<GenericParameter, GenericParameter> genericMap = new Dictionary<GenericParameter, GenericParameter>();
+        foreach (GenericParameter parameter in source.DeclaringType.GenericParameters)
+            genericMap.Add(parameter, parameter);
+        foreach (GenericParameter parameter in source.GenericParameters)
+        {
+            GenericParameter clone = new GenericParameter(parameter.Name, adapter) { Attributes = parameter.Attributes };
+            adapter.GenericParameters.Add(clone);
+            genericMap.Add(parameter, clone);
+        }
+        foreach (GenericParameter parameter in source.GenericParameters)
+        {
+            GenericParameter clone = genericMap[parameter];
+            foreach (GenericParameterConstraint constraint in parameter.Constraints)
+                clone.Constraints.Add(new GenericParameterConstraint(
+                    ImportTypedSignatureType(source.Module, constraint.ConstraintType, source, genericMap)));
+        }
+
+        adapter.ReturnType = ImportTypedSignatureType(source.Module, source.ReturnType, source, genericMap);
+        if (!source.IsStatic)
+        {
+            TypeReference instanceType = GetSelfType(source);
+            if (source.DeclaringType.IsValueType) instanceType = new ByReferenceType(instanceType);
+            adapter.Parameters.Add(new ParameterDefinition("instance", ParameterAttributes.None,
+                source.Module.ImportReference(instanceType, adapter)));
+        }
+        foreach (ParameterDefinition parameter in source.Parameters)
+            adapter.Parameters.Add(new ParameterDefinition(parameter.Name, parameter.Attributes,
+                ImportTypedSignatureType(source.Module, parameter.ParameterType, source, genericMap)));
+
+        MethodBody body = new MethodBody(adapter) { InitLocals = false, MaxStackSize = Math.Max(adapter.Parameters.Count, 1) };
+        ILProcessor il = body.GetILProcessor();
+        for (int index = 0; index < adapter.Parameters.Count; index++)
+            il.Append(LoadArgument(il, index));
+        il.Append(il.Create(OpCodes.Call, CreateOriginalCall(original, adapter)));
+        il.Append(il.Create(OpCodes.Ret));
+        adapter.Body = body;
+        return adapter;
+    }
+
+    private static TypeReference ImportTypedSignatureType(ModuleDefinition module, TypeReference source,
+        MethodDefinition context, Dictionary<GenericParameter, GenericParameter> genericMap)
+    {
+        if (source is GenericParameter genericParameter)
+        {
+            GenericParameter mapped;
+            if (genericMap.TryGetValue(genericParameter, out mapped)) return mapped;
+            GenericParameter[] positionalMatches = genericMap.Keys
+                .Where(parameter => parameter.Type == genericParameter.Type && parameter.Position == genericParameter.Position)
+                .ToArray();
+            if (positionalMatches.Length == 1) return genericMap[positionalMatches[0]];
+            throw new InvalidOperationException("Typed hook signature contains an unmapped generic parameter: " + source.FullName);
+        }
+        if (source is ByReferenceType byReference) return new ByReferenceType(ImportTypedSignatureType(module, byReference.ElementType, context, genericMap));
+        if (source is PointerType pointer) return new PointerType(ImportTypedSignatureType(module, pointer.ElementType, context, genericMap));
+        if (source is PinnedType pinned) return new PinnedType(ImportTypedSignatureType(module, pinned.ElementType, context, genericMap));
+        if (source is SentinelType sentinel) return new SentinelType(ImportTypedSignatureType(module, sentinel.ElementType, context, genericMap));
+        if (source is OptionalModifierType optional)
+            return new OptionalModifierType(ImportTypedSignatureType(module, optional.ModifierType, context, genericMap),
+                ImportTypedSignatureType(module, optional.ElementType, context, genericMap));
+        if (source is RequiredModifierType required)
+            return new RequiredModifierType(ImportTypedSignatureType(module, required.ModifierType, context, genericMap),
+                ImportTypedSignatureType(module, required.ElementType, context, genericMap));
+        if (source is ArrayType array)
+        {
+            ArrayType clone = new ArrayType(ImportTypedSignatureType(module, array.ElementType, context, genericMap), array.Rank);
+            for (int index = 0; index < array.Dimensions.Count; index++)
+            {
+                ArrayDimension dimension = array.Dimensions[index];
+                dimension.LowerBound = array.Dimensions[index].LowerBound;
+                dimension.UpperBound = array.Dimensions[index].UpperBound;
+                clone.Dimensions[index] = dimension;
+            }
+            return clone;
+        }
+        if (source is GenericInstanceType generic)
+        {
+            GenericInstanceType clone = new GenericInstanceType(ImportTypedSignatureType(module, generic.ElementType, context, genericMap));
+            foreach (TypeReference argument in generic.GenericArguments)
+                clone.GenericArguments.Add(ImportTypedSignatureType(module, argument, context, genericMap));
+            return clone;
+        }
+        if (source is FunctionPointerType functionPointer)
+        {
+            FunctionPointerType clone = new FunctionPointerType
+            {
+                HasThis = functionPointer.HasThis,
+                ExplicitThis = functionPointer.ExplicitThis,
+                CallingConvention = functionPointer.CallingConvention,
+                ReturnType = ImportTypedSignatureType(module, functionPointer.ReturnType, context, genericMap)
+            };
+            foreach (ParameterDefinition parameter in functionPointer.Parameters)
+                clone.Parameters.Add(new ParameterDefinition(parameter.Name, parameter.Attributes,
+                    ImportTypedSignatureType(module, parameter.ParameterType, context, genericMap)));
+            return clone;
+        }
+        return module.ImportReference(source, context);
     }
 
     private static int FindConstructorChainCall(MethodDefinition method)
@@ -432,8 +838,9 @@ public static class IOSHookWeaver
             Instruction instruction = method.Body.Instructions[i];
             if (instruction.OpCode.Code != Code.Call || !(instruction.Operand is MethodReference called) || called.Name != ".ctor")
                 continue;
-            if (called.DeclaringType.FullName == method.DeclaringType.FullName ||
-                called.DeclaringType.FullName == method.DeclaringType.BaseType?.FullName)
+            string calledTypeName = GetGenericDefinitionFullName(called.DeclaringType);
+            if (calledTypeName == method.DeclaringType.FullName ||
+                calledTypeName == GetGenericDefinitionFullName(method.DeclaringType.BaseType))
             {
                 index = i;
                 break;
@@ -441,16 +848,17 @@ public static class IOSHookWeaver
         }
         if (index < 0) return -1;
 
-        for (int i = 0; i < index; i++)
-        {
-            FlowControl flow = method.Body.Instructions[i].OpCode.FlowControl;
-            if (flow == FlowControl.Branch || flow == FlowControl.Cond_Branch || flow == FlowControl.Return || flow == FlowControl.Throw)
-                return -1;
-        }
-
         Dictionary<Instruction, int> positions = method.Body.Instructions
             .Select((instruction, instructionIndex) => new { instruction, instructionIndex })
             .ToDictionary(pair => pair.instruction, pair => pair.instructionIndex);
+        for (int i = 0; i < index; i++)
+        {
+            object operand = method.Body.Instructions[i].Operand;
+            if (operand is Instruction branch && positions.TryGetValue(branch, out int branchIndex) && branchIndex > index)
+                return -1;
+            if (operand is Instruction[] branches && branches.Any(branchTarget => positions.TryGetValue(branchTarget, out int branchIndex) && branchIndex > index))
+                return -1;
+        }
         for (int i = index + 1; i < method.Body.Instructions.Count; i++)
         {
             object operand = method.Body.Instructions[i].Operand;
@@ -469,6 +877,11 @@ public static class IOSHookWeaver
                 return -1;
         }
         return index;
+    }
+
+    private static string GetGenericDefinitionFullName(TypeReference type)
+    {
+        return type is GenericInstanceType generic ? generic.ElementType.FullName : type?.FullName;
     }
 
     private static bool BoundaryAtOrBefore(Instruction instruction, int boundary, Dictionary<Instruction, int> positions)
@@ -496,11 +909,32 @@ public static class IOSHookWeaver
             Instruction copy = instructions[source];
             copy.OpCode = source.OpCode;
             copy.Operand = MapOperand(source.Operand, method, instructions, variables, parameters);
+            if (TryGetImplicitLocalIndex(source.OpCode.Code, out int localIndex, out OpCode localOpcode))
+            {
+                copy.OpCode = localOpcode;
+                copy.Operand = variables[method.Body.Variables[localIndex]];
+            }
             prefix.Add(copy);
         }
         for (int i = prefix.Count - 1; i >= 0; i--)
             gateBody.Instructions.Insert(0, prefix[i]);
         gateBody.MaxStackSize = Math.Max(gateBody.MaxStackSize, method.Body.MaxStackSize);
+    }
+
+    private static bool TryGetImplicitLocalIndex(Code code, out int index, out OpCode opcode)
+    {
+        switch (code)
+        {
+            case Code.Ldloc_0: index = 0; opcode = OpCodes.Ldloc_S; return true;
+            case Code.Ldloc_1: index = 1; opcode = OpCodes.Ldloc_S; return true;
+            case Code.Ldloc_2: index = 2; opcode = OpCodes.Ldloc_S; return true;
+            case Code.Ldloc_3: index = 3; opcode = OpCodes.Ldloc_S; return true;
+            case Code.Stloc_0: index = 0; opcode = OpCodes.Stloc_S; return true;
+            case Code.Stloc_1: index = 1; opcode = OpCodes.Stloc_S; return true;
+            case Code.Stloc_2: index = 2; opcode = OpCodes.Stloc_S; return true;
+            case Code.Stloc_3: index = 3; opcode = OpCodes.Stloc_S; return true;
+            default: index = -1; opcode = default; return false;
+        }
     }
 
     private static MethodDefinition CloneOriginal(MethodDefinition source, string name)
@@ -657,12 +1091,19 @@ public static class IOSHookWeaver
         ILProcessor il = body.GetILProcessor();
         Instruction dispatch = Instruction.Create(OpCodes.Nop);
 
-        il.Append(il.Create(OpCodes.Ldsfld, gate));
-        il.Append(il.Create(OpCodes.Brtrue, dispatch));
-        if (!method.IsStatic) il.Append(il.Create(OpCodes.Ldarg_0));
-        foreach (ParameterDefinition parameter in method.Parameters) il.Append(LoadArgument(il, parameter.Index + (method.IsStatic ? 0 : 1)));
-        il.Append(il.Create(OpCodes.Call, CreateOriginalCall(original, method)));
-        il.Append(il.Create(OpCodes.Ret));
+        // A static constructor is one-shot. It always enters the dispatcher so
+        // registering a hook never has to write its gate field (which could run
+        // the very type initializer being hooked through reflection).
+        bool alwaysDispatch = method.IsConstructor && method.IsStatic;
+        if (!alwaysDispatch)
+        {
+            il.Append(il.Create(OpCodes.Ldsfld, CreateGateFieldReference(gate, method)));
+            il.Append(il.Create(OpCodes.Brtrue, dispatch));
+            if (!method.IsStatic) il.Append(il.Create(OpCodes.Ldarg_0));
+            foreach (ParameterDefinition parameter in method.Parameters) il.Append(LoadArgument(il, parameter.Index + (method.IsStatic ? 0 : 1)));
+            il.Append(il.Create(OpCodes.Call, CreateOriginalCall(original, method)));
+            il.Append(il.Create(OpCodes.Ret));
+        }
 
         il.Append(dispatch);
         VariableDefinition arguments = new VariableDefinition(new ArrayType(method.Module.TypeSystem.Object));
@@ -731,6 +1172,92 @@ public static class IOSHookWeaver
         return body;
     }
 
+    private static MethodBody CreateTypedGateBody(MethodDefinition method, MethodDefinition original, FieldDefinition gate, TypeDefinition delegateType)
+    {
+        MethodBody body = new MethodBody(method) { InitLocals = true, MaxStackSize = 8 };
+        ILProcessor il = body.GetILProcessor();
+        Instruction dispatch = Instruction.Create(OpCodes.Nop);
+
+        il.Append(il.Create(OpCodes.Ldsfld, CreateGateFieldReference(gate, method)));
+        il.Append(il.Create(OpCodes.Brtrue, dispatch));
+        if (!method.IsStatic) il.Append(il.Create(OpCodes.Ldarg_0));
+        foreach (ParameterDefinition parameter in method.Parameters)
+            il.Append(LoadArgument(il, parameter.Index + (method.IsStatic ? 0 : 1)));
+        il.Append(il.Create(OpCodes.Call, CreateOriginalCall(original, method)));
+        il.Append(il.Create(OpCodes.Ret));
+
+        il.Append(dispatch);
+        VariableDefinition methodBase = new VariableDefinition(CreateType(method.Module, "System.Reflection", "MethodBase"));
+        VariableDefinition dispatcher = new VariableDefinition(new GenericInstanceType(CreateType(method.Module, "System", "Func`3")));
+        GenericInstanceType funcType = (GenericInstanceType)dispatcher.VariableType;
+        funcType.GenericArguments.Add(CreateType(method.Module, "System.Reflection", "MethodBase"));
+        funcType.GenericArguments.Add(CreateType(method.Module, "System", "Type"));
+        funcType.GenericArguments.Add(CreateType(method.Module, "System", "Delegate"));
+        TypeReference typedDelegateReference = CreateTypedDelegateInstance(method, delegateType);
+        VariableDefinition typedDelegate = new VariableDefinition(typedDelegateReference);
+        body.Variables.Add(methodBase);
+        body.Variables.Add(dispatcher);
+        body.Variables.Add(typedDelegate);
+
+        il.Append(EmitMethodHandle(il, method));
+        il.Append(il.Create(OpCodes.Stloc, methodBase));
+        il.Append(il.Create(OpCodes.Call, CreateCurrentDomainGetter(method.Module)));
+        il.Append(il.Create(OpCodes.Ldstr, TypedDispatchKey));
+        il.Append(il.Create(OpCodes.Callvirt, CreateGetData(method.Module)));
+        il.Append(il.Create(OpCodes.Castclass, funcType));
+        il.Append(il.Create(OpCodes.Stloc, dispatcher));
+
+        il.Append(il.Create(OpCodes.Ldloc, dispatcher));
+        il.Append(il.Create(OpCodes.Ldloc, methodBase));
+        il.Append(il.Create(OpCodes.Ldtoken, typedDelegateReference));
+        il.Append(il.Create(OpCodes.Call, CreateTypeFromHandle(method.Module)));
+        il.Append(il.Create(OpCodes.Callvirt, CreateTypedFuncInvoke(method.Module, funcType)));
+        il.Append(il.Create(OpCodes.Castclass, typedDelegateReference));
+        il.Append(il.Create(OpCodes.Stloc, typedDelegate));
+
+        il.Append(il.Create(OpCodes.Ldloc, typedDelegate));
+        if (!method.IsStatic) il.Append(il.Create(OpCodes.Ldarg_0));
+        foreach (ParameterDefinition parameter in method.Parameters)
+            il.Append(LoadArgument(il, parameter.Index + (method.IsStatic ? 0 : 1)));
+        il.Append(il.Create(OpCodes.Callvirt, CreateTypedDelegateInvoke(method, delegateType, typedDelegateReference)));
+        il.Append(il.Create(OpCodes.Ret));
+        return body;
+    }
+
+    private static TypeReference CreateTypedDelegateInstance(MethodDefinition method, TypeDefinition delegateType)
+    {
+        if (!delegateType.HasGenericParameters) return delegateType;
+        GenericInstanceType instance = new GenericInstanceType(delegateType);
+        foreach (GenericParameter parameter in method.DeclaringType.GenericParameters) instance.GenericArguments.Add(parameter);
+        foreach (GenericParameter parameter in method.GenericParameters) instance.GenericArguments.Add(parameter);
+        return instance;
+    }
+
+    private static FieldReference CreateGateFieldReference(FieldDefinition gate, MethodDefinition method)
+    {
+        if (!method.DeclaringType.HasGenericParameters) return gate;
+        GenericInstanceType declaringType = new GenericInstanceType(gate.DeclaringType);
+        foreach (GenericParameter parameter in method.DeclaringType.GenericParameters)
+            declaringType.GenericArguments.Add(parameter);
+        return new FieldReference(gate.Name, gate.FieldType, declaringType);
+    }
+
+    private static MethodReference CreateTypedDelegateInvoke(MethodDefinition method, TypeDefinition delegateType,
+        TypeReference delegateInstanceType)
+    {
+        MethodDefinition invoke = delegateType.Methods.First(candidate => candidate.Name == "Invoke");
+        MethodReference reference = new MethodReference("Invoke", invoke.ReturnType, delegateInstanceType)
+        {
+            HasThis = true,
+            ExplicitThis = false,
+            CallingConvention = MethodCallingConvention.Default
+        };
+        foreach (ParameterDefinition parameter in invoke.Parameters)
+            reference.Parameters.Add(new ParameterDefinition(parameter.Name, parameter.Attributes,
+                parameter.ParameterType));
+        return reference;
+    }
+
     private static bool IsVoidReturnType(TypeReference type)
     {
         while (true)
@@ -774,10 +1301,36 @@ public static class IOSHookWeaver
 
     private static MethodReference CreateOriginalCall(MethodDefinition original, MethodDefinition target)
     {
-        if (!target.HasGenericParameters) return original;
-        GenericInstanceMethod instantiation = new GenericInstanceMethod(original);
-        foreach (GenericParameter parameter in target.GenericParameters) instantiation.GenericArguments.Add(parameter);
-        return instantiation;
+        MethodReference call = original;
+        if (target.DeclaringType.HasGenericParameters)
+        {
+            GenericInstanceType declaringType = new GenericInstanceType(original.DeclaringType);
+            foreach (GenericParameter parameter in target.DeclaringType.GenericParameters)
+                declaringType.GenericArguments.Add(parameter);
+            MethodReference declaringMember = new MethodReference(original.Name,
+                original.Module.ImportReference(original.ReturnType, target), declaringType)
+            {
+                HasThis = original.HasThis,
+                ExplicitThis = original.ExplicitThis,
+                CallingConvention = original.CallingConvention
+            };
+            foreach (ParameterDefinition parameter in original.Parameters)
+                declaringMember.Parameters.Add(new ParameterDefinition(parameter.Name, parameter.Attributes,
+                    original.Module.ImportReference(parameter.ParameterType, target)));
+            foreach (GenericParameter parameter in original.GenericParameters)
+                declaringMember.GenericParameters.Add(new GenericParameter(parameter.Name, declaringMember)
+                {
+                    Attributes = parameter.Attributes
+                });
+            call = declaringMember;
+        }
+        if (target.HasGenericParameters)
+        {
+            GenericInstanceMethod instantiation = new GenericInstanceMethod(call);
+            foreach (GenericParameter parameter in target.GenericParameters) instantiation.GenericArguments.Add(parameter);
+            call = instantiation;
+        }
+        return call;
     }
 
     private static void EmitArgumentArray(ILProcessor il, MethodDefinition method, VariableDefinition arguments)
@@ -904,6 +1457,18 @@ public static class IOSHookWeaver
         MethodReference method = module.ImportReference(typeof(Func<RuntimeMethodBase, object, object[], object>).GetMethod("Invoke"));
         method.DeclaringType = funcType;
         return method;
+    }
+
+    private static MethodReference CreateTypedFuncInvoke(ModuleDefinition module, GenericInstanceType funcType)
+    {
+        MethodReference method = module.ImportReference(typeof(Func<RuntimeMethodBase, Type, Delegate>).GetMethod("Invoke"));
+        method.DeclaringType = funcType;
+        return method;
+    }
+
+    private static MethodReference CreateTypeFromHandle(ModuleDefinition module)
+    {
+        return module.ImportReference(typeof(Type).GetMethod("GetTypeFromHandle", new[] { typeof(RuntimeTypeHandle) }));
     }
 
     private static MethodReference CreateDynamicInvoke(ModuleDefinition module)

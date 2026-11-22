@@ -61,6 +61,14 @@ namespace celestemeow
                 context.Unloading += _ => { lock (Sync) AssemblySnapshots.Remove(assembly); };
         }
 
+        internal static KeyValuePair<string, byte[]>[] GetAssemblySnapshotImages()
+        {
+            lock (Sync)
+                return AssemblySnapshots
+                    .Select(entry => new KeyValuePair<string, byte[]>(entry.Key.GetName().Name, entry.Value))
+                    .ToArray();
+        }
+
         public static void Add(MethodBase target, Delegate manipulator, object config)
         {
             if (target == null) throw new ArgumentNullException(nameof(target));
@@ -201,8 +209,8 @@ namespace celestemeow
             MethodInfo targetMethod = target as MethodInfo;
             if (targetMethod == null && !(target is ConstructorInfo))
                 throw new NotSupportedException("IL hooks require a managed method or constructor: " + target);
-            if ((targetMethod != null && targetMethod.IsGenericMethod) || target.DeclaringType.ContainsGenericParameters)
-                throw new NotSupportedException("The current iOS body weaver requires a closed, non-generic target: " + target);
+            if (target.ContainsGenericParameters)
+                throw new NotSupportedException("An IL hook must target a closed generic method or type on iOS: " + target);
 
             ReaderParameters readerParameters = new ReaderParameters
             {
@@ -218,7 +226,11 @@ namespace celestemeow
             else
                 celeste = AssemblyDefinition.ReadAssembly(ResolveGameAssemblyPath(target), readerParameters);
             ModuleDefinition sourceModule = celeste.MainModule;
-            string declaringTypeName = target.DeclaringType.FullName.Replace('+', '/');
+            Type closedDeclaringType = target.DeclaringType;
+            Type genericDeclaringType = closedDeclaringType.IsConstructedGenericType
+                ? closedDeclaringType.GetGenericTypeDefinition()
+                : closedDeclaringType;
+            string declaringTypeName = genericDeclaringType.FullName.Replace('+', '/');
             TypeDefinition declaringType = sourceModule.GetType(declaringTypeName);
             if (declaringType == null) throw new TypeLoadException("Could not find the IL hook target type in Celeste.dll: " + declaringTypeName);
 
@@ -301,16 +313,53 @@ namespace celestemeow
                 module.ImportReference(typeof(object)));
             module.Types.Add(helper);
 
+            Dictionary<GenericParameter, GenericParameter> genericParameters = new Dictionary<GenericParameter, GenericParameter>();
+            foreach (GenericParameter sourceParameter in sourceMethod.DeclaringType.GenericParameters)
+            {
+                GenericParameter helperParameter = new GenericParameter(sourceParameter.Name, helper)
+                {
+                    Attributes = sourceParameter.Attributes
+                };
+                helper.GenericParameters.Add(helperParameter);
+                genericParameters.Add(sourceParameter, helperParameter);
+            }
+
             MethodDefinition bodyMethod = new MethodDefinition(
                 "Invoke",
                 Mono.Cecil.MethodAttributes.Public | Mono.Cecil.MethodAttributes.Static | Mono.Cecil.MethodAttributes.HideBySig,
-                module.ImportReference(sourceMethod.ReturnType));
+                module.TypeSystem.Void);
             helper.Methods.Add(bodyMethod);
+
+            foreach (GenericParameter sourceParameter in sourceMethod.GenericParameters)
+            {
+                GenericParameter helperParameter = new GenericParameter(sourceParameter.Name, bodyMethod)
+                {
+                    Attributes = sourceParameter.Attributes
+                };
+                bodyMethod.GenericParameters.Add(helperParameter);
+                genericParameters.Add(sourceParameter, helperParameter);
+            }
+            foreach (GenericParameter sourceParameter in sourceMethod.DeclaringType.GenericParameters.Concat(sourceMethod.GenericParameters))
+            {
+                GenericParameter helperParameter = genericParameters[sourceParameter];
+                foreach (GenericParameterConstraint constraint in sourceParameter.Constraints)
+                    helperParameter.Constraints.Add(new GenericParameterConstraint(
+                        module.ImportReference(constraint.ConstraintType, bodyMethod)));
+            }
+
+            bodyMethod.ReturnType = module.ImportReference(sourceMethod.ReturnType, bodyMethod);
 
             Dictionary<ParameterDefinition, ParameterDefinition> parameters = new Dictionary<ParameterDefinition, ParameterDefinition>();
             if (!target.IsStatic)
             {
-                TypeReference selfType = module.ImportReference(target.DeclaringType);
+                TypeReference selfType = module.ImportReference(sourceMethod.DeclaringType);
+                if (sourceMethod.DeclaringType.HasGenericParameters)
+                {
+                    GenericInstanceType genericSelfType = new GenericInstanceType(selfType);
+                    foreach (GenericParameter parameter in helper.GenericParameters)
+                        genericSelfType.GenericArguments.Add(parameter);
+                    selfType = genericSelfType;
+                }
                 if (target.DeclaringType.IsValueType) selfType = new ByReferenceType(selfType);
                 ParameterDefinition self = new ParameterDefinition("self", Mono.Cecil.ParameterAttributes.None, selfType);
                 bodyMethod.Parameters.Add(self);
@@ -318,7 +367,8 @@ namespace celestemeow
             }
             foreach (ParameterDefinition parameter in sourceMethod.Parameters)
             {
-                ParameterDefinition imported = new ParameterDefinition(parameter.Name, parameter.Attributes, module.ImportReference(parameter.ParameterType));
+                ParameterDefinition imported = new ParameterDefinition(parameter.Name, parameter.Attributes,
+                    module.ImportReference(parameter.ParameterType, bodyMethod));
                 bodyMethod.Parameters.Add(imported);
                 parameters[parameter] = imported;
             }
@@ -327,9 +377,18 @@ namespace celestemeow
             using (MemoryStream stream = new MemoryStream())
             {
                 sidecar.Write(stream);
-                Assembly assembly = AssemblyLoadContext.Default.LoadFromStream(new MemoryStream(stream.ToArray()));
+                AssemblyLoadContext loadContext = AssemblyLoadContext.GetLoadContext(target.Module.Assembly) ?? AssemblyLoadContext.Default;
+                Assembly assembly = loadContext.LoadFromStream(new MemoryStream(stream.ToArray()));
                 Type helperType = assembly.GetType(helper.FullName, true);
-                return helperType.GetMethod("Invoke", BindingFlags.Public | BindingFlags.Static);
+                if (helperType.IsGenericTypeDefinition && target.DeclaringType.IsConstructedGenericType)
+                    helperType = helperType.MakeGenericType(target.DeclaringType.GetGenericArguments());
+                MethodInfo loadedMethod = helperType.GetMethod("Invoke", BindingFlags.Public | BindingFlags.Static);
+                if (loadedMethod.IsGenericMethodDefinition && target is MethodInfo closedMethod && closedMethod.IsGenericMethod &&
+                    !closedMethod.IsGenericMethodDefinition)
+                    loadedMethod = loadedMethod.MakeGenericMethod(closedMethod.GetGenericArguments());
+                if (loadedMethod.ContainsGenericParameters)
+                    throw new InvalidOperationException("The iOS IL hook sidecar did not close all generic parameters for " + target + ".");
+                return loadedMethod;
             }
         }
 
@@ -379,7 +438,7 @@ namespace celestemeow
             Dictionary<VariableDefinition, VariableDefinition> variables = new Dictionary<VariableDefinition, VariableDefinition>();
             foreach (VariableDefinition variable in source.Body.Variables)
             {
-                VariableDefinition imported = new VariableDefinition(module.ImportReference(variable.VariableType));
+                VariableDefinition imported = new VariableDefinition(module.ImportReference(variable.VariableType, destination));
                 body.Variables.Add(imported);
                 variables[variable] = imported;
             }
@@ -392,7 +451,7 @@ namespace celestemeow
             {
                 Instruction copied = instructions[instruction];
                 copied.OpCode = instruction.OpCode;
-                copied.Operand = MapOperand(instruction.Operand, module, instructions, variables, parameters);
+                copied.Operand = MapOperand(instruction.Operand, module, destination, instructions, variables, parameters);
                 il.Append(copied);
             }
 
@@ -400,7 +459,7 @@ namespace celestemeow
             {
                 body.ExceptionHandlers.Add(new ExceptionHandler(handler.HandlerType)
                 {
-                    CatchType = handler.CatchType == null ? null : module.ImportReference(handler.CatchType),
+                    CatchType = handler.CatchType == null ? null : module.ImportReference(handler.CatchType, destination),
                     TryStart = handler.TryStart == null ? null : instructions[handler.TryStart],
                     TryEnd = handler.TryEnd == null ? null : instructions[handler.TryEnd],
                     HandlerStart = handler.HandlerStart == null ? null : instructions[handler.HandlerStart],
@@ -414,6 +473,7 @@ namespace celestemeow
         private static object MapOperand(
             object operand,
             ModuleDefinition module,
+            MethodDefinition context,
             Dictionary<Instruction, Instruction> instructions,
             Dictionary<VariableDefinition, VariableDefinition> variables,
             Dictionary<ParameterDefinition, ParameterDefinition> parameters)
@@ -422,23 +482,24 @@ namespace celestemeow
             else if (operand is Instruction[] targets) operand = targets.Select(item => instructions[item]).ToArray();
             else if (operand is VariableDefinition variable) operand = variables[variable];
             else if (operand is ParameterDefinition parameter) operand = parameters[parameter];
-            else if (operand is MethodReference method) operand = module.ImportReference(method);
-            else if (operand is FieldReference field) operand = module.ImportReference(field);
-            else if (operand is TypeReference type) operand = module.ImportReference(type);
-            else if (operand is CallSite callSite) operand = CloneCallSite(callSite, module);
+            else if (operand is MethodReference method) operand = module.ImportReference(method, context);
+            else if (operand is FieldReference field) operand = module.ImportReference(field, context);
+            else if (operand is TypeReference type) operand = module.ImportReference(type, context);
+            else if (operand is CallSite callSite) operand = CloneCallSite(callSite, module, context);
             return operand;
         }
 
-        private static CallSite CloneCallSite(CallSite source, ModuleDefinition module)
+        private static CallSite CloneCallSite(CallSite source, ModuleDefinition module, MethodDefinition context)
         {
-            CallSite clone = new CallSite(module.ImportReference(source.ReturnType))
+            CallSite clone = new CallSite(module.ImportReference(source.ReturnType, context))
             {
                 HasThis = source.HasThis,
                 ExplicitThis = source.ExplicitThis,
                 CallingConvention = source.CallingConvention
             };
             foreach (ParameterDefinition parameter in source.Parameters)
-                clone.Parameters.Add(new ParameterDefinition(parameter.Name, parameter.Attributes, module.ImportReference(parameter.ParameterType)));
+                clone.Parameters.Add(new ParameterDefinition(parameter.Name, parameter.Attributes,
+                    module.ImportReference(parameter.ParameterType, context)));
             return clone;
         }
     }

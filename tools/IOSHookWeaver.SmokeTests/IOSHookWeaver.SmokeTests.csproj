@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <DefineConstants>__IOS__</DefineConstants>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+    <PackageReference Include="YamlDotNet" Version="16.1.3" />
+    <ProjectReference Include="../../Everest/external/MonoMod/src/MonoMod.Utils/MonoMod.Utils.csproj" />
+    <Compile Include="../IOSHookWeaver/Program.cs" Link="IOSHookWeaver.cs" />
+    <Compile Include="../../celestemeow/IOSHookIdentity.cs" Link="IOSHookIdentity.cs" />
+    <Compile Include="../../celestemeow/IOSHookRuntime.cs" Link="IOSHookRuntime.cs" />
+    <Compile Include="../../celestemeow/IOSILHookRuntime.cs" Link="IOSILHookRuntime.cs" />
+    <Compile Include="../../celestemeow/ModDependencyResolver.cs" Link="ModDependencyResolver.cs" />
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="TargetFixture/TargetFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="HookFixture/HookFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="ModDependencyFixture/ModDependencyFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="TextCopyFixture/TextCopyFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="CeilingUltraFixture/CeilingUltraFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="ChroniaHelperFixture/ChroniaHelperFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../Everest/Celeste.Mod.mm/Celeste.Mod.mm.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

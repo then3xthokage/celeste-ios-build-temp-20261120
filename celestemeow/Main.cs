@@ -2,6 +2,9 @@
 using System.Reflection;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+using Foundation;
 using SDL2;
 using UIKit;
 
@@ -13,6 +16,89 @@ namespace celestemeow
         static UIWindow modManagerWindow;
         static ModManagerViewController modManagerController;
         static bool celesteIsRunning;
+
+        static void RegisterIOSClipboardDelegates()
+        {
+            AppDomain.CurrentDomain.SetData("Celeste.IOSClipboard.GetText", (Func<string>)GetClipboardText);
+            AppDomain.CurrentDomain.SetData("Celeste.IOSClipboard.SetText", (Action<string>)SetClipboardText);
+            AppDomain.CurrentDomain.SetData("Celeste.IOSClipboard.GetTextAsync",
+                (Func<CancellationToken, Task<string>>)GetClipboardTextAsync);
+            AppDomain.CurrentDomain.SetData("Celeste.IOSClipboard.SetTextAsync",
+                (Func<string, CancellationToken, Task>)SetClipboardTextAsync);
+            AppDomain.CurrentDomain.SetData("Celeste.IOSExternalLinks.OpenUrl", (Action<string>)OpenExternalUrl);
+        }
+
+        static void OpenExternalUrl(string value)
+        {
+            if (!Uri.TryCreate(value, UriKind.Absolute, out Uri uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                return;
+
+            UIApplication.SharedApplication.InvokeOnMainThread(() =>
+                UIApplication.SharedApplication.OpenUrl(new NSUrl(uri.AbsoluteUri)));
+        }
+
+        static string GetClipboardText()
+        {
+            string value = string.Empty;
+            UIApplication.SharedApplication.InvokeOnMainThread(() => value = UIPasteboard.General.String ?? string.Empty);
+            return value;
+        }
+
+        static void SetClipboardText(string value)
+        {
+            UIApplication.SharedApplication.InvokeOnMainThread(() => UIPasteboard.General.String = value ?? string.Empty);
+        }
+
+        static Task<string> GetClipboardTextAsync(CancellationToken cancellationToken)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                return Task.FromCanceled<string>(cancellationToken);
+
+            TaskCompletionSource<string> completion = new TaskCompletionSource<string>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            CancellationTokenRegistration registration = cancellationToken.Register(
+                () => completion.TrySetCanceled(cancellationToken));
+            UIApplication.SharedApplication.BeginInvokeOnMainThread(() =>
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    registration.Dispose();
+                    return;
+                }
+                try { completion.TrySetResult(UIPasteboard.General.String ?? string.Empty); }
+                catch (Exception exception) { completion.TrySetException(exception); }
+                finally { registration.Dispose(); }
+            });
+            return completion.Task;
+        }
+
+        static Task SetClipboardTextAsync(string value, CancellationToken cancellationToken)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                return Task.FromCanceled(cancellationToken);
+
+            TaskCompletionSource<bool> completion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            CancellationTokenRegistration registration = cancellationToken.Register(
+                () => completion.TrySetCanceled(cancellationToken));
+            UIApplication.SharedApplication.BeginInvokeOnMainThread(() =>
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    registration.Dispose();
+                    return;
+                }
+                try
+                {
+                    UIPasteboard.General.String = value ?? string.Empty;
+                    completion.TrySetResult(true);
+                }
+                catch (Exception exception) { completion.TrySetException(exception); }
+                finally { registration.Dispose(); }
+            });
+            return completion.Task;
+        }
 
         [DllImport("__Internal", EntryPoint = "SDL_iPhoneSetEventPump", CallingConvention = CallingConvention.Cdecl)]
         static extern void SetSdlEventPump(int enabled);
@@ -188,6 +274,7 @@ namespace celestemeow
 #endif
         {
             TraceStartup("RealMain entered");
+            RegisterIOSClipboardDelegates();
             IOSHookRuntime.Initialize();
             string gameAssemblyPath = typeof(Celeste.Celeste).Assembly.Location;
             if (string.IsNullOrEmpty(gameAssemblyPath))

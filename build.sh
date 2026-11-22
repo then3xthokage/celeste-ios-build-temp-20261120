@@ -246,7 +246,7 @@ clone_repo https://github.com/FNA-XNA/Theorafile lib/Theorafile # ^ same thing h
 cd "$script_dir/FNA/lib/SDL2-CS" || cd_fail
 if ! git checkout 2b8d237fd4585d14ea837764ac247d4cd200158f; then error "failed to checkout SDL2-CS"; exit 1; fi
 cd "$script_dir/FNA/lib/Theorafile" || cd_fail
-if ! git checkout 0c5504658a3108919e53b625287786a87529de42; then error "failed to checkout Theorafile"; exit 1; fi
+if ! git checkout 48d74afcbf838fe95ca56cec142efae07bb56f65; then error "failed to checkout Theorafile"; exit 1; fi
 
 fna3d_path="$script_dir/FNA/lib/FNA3D"
 
@@ -285,6 +285,10 @@ apply_patch() {
 	fi
 	if [ "$2" == "1" ]; then mv "$script_dir/.git-tmp" "$script_dir/.git"; fi
 }
+
+cd "$script_dir/FNA/lib/Theorafile" || cd_fail
+apply_patch "$script_dir/patches/Theorafile-VidPlayer.patch"
+cd "$script_dir/FNA" || cd_fail
 
 info "applying the iOS Everest integration patch"
 cd "$script_dir/Everest" || cd_fail
@@ -711,6 +715,9 @@ else
 		error "failed to align FNA3D's pinned shader and Vulkan dependencies"
 		exit 1
 	fi
+	cd "$script_dir/fnalibs-ios-builder-celeste/Theorafile" || cd_fail
+	apply_patch "$script_dir/patches/Theorafile-VidPlayer.patch"
+	cd "$script_dir/fnalibs-ios-builder-celeste" || cd_fail
 	cd "$script_dir/fnalibs-ios-builder-celeste/FNA3D" || cd_fail
 	apply_patch "$script_dir/patches/FNA-FNA3D-renderer.patch"
 	cd "$script_dir/fnalibs-ios-builder-celeste" || cd_fail
@@ -729,6 +736,16 @@ else
 fi
 
 cd "$script_dir" || cd_fail
+
+theorafile_archive="$script_dir/celestemeow/libtheorafile.a"
+for symbol in tf_audioinfo tf_close tf_eos tf_fopen tf_gettheorasize tf_granpos_dec \
+	tf_hasaudio tf_hasvideo tf_open_callbacks tf_readaudio tf_readaudio2 \
+	tf_readvideo tf_readvideo2 tf_reset tf_setaudiotrack tf_setvideotrack tf_videoinfo; do
+	if ! nm -g "$theorafile_archive" | awk '{ symbol = $NF; sub(/^_/, "", symbol); print symbol }' | grep -Fxq "$symbol"; then
+		error "the patched iOS Theorafile archive is missing required VidPlayer symbol '$symbol'"
+		exit 1
+	fi
+done
 
 if ! dotnet publish "$script_dir/celestemeow/ci-ios.csproj" \
 	--configuration Release \
