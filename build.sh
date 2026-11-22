@@ -603,15 +603,6 @@ done
 cp "$script_dir/celeste/MMHOOK_Celeste.dll" "$everest_runtime/MMHOOK_Celeste.dll"
 for assembly in "$everest_runtime"/*.dll; do
 	runtime_assembly=$(basename "$assembly")
-	case "$runtime_assembly" in
-		Mono.Cecil*.dll|MonoMod.Utils.dll)
-			# Mod assemblies and Celeste are woven below/above. Mono.Cecil and
-			# MonoMod.Utils are execution infrastructure for DMDType=cecil; weaving
-			# these libraries breaks their reflection-loaded generated methods.
-			info "preserving portable code-generation dependency $runtime_assembly"
-			continue
-			;;
-	esac
 	if ! dotnet run --project "$script_dir/tools/IOSHookWeaver/IOSHookWeaver.csproj" \
 		--configuration Release -- "$assembly" "$assembly.woven"; then
 		error "failed to weave hook gates in runtime assembly $(basename "$assembly")"

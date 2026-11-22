@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -11,7 +13,7 @@ using MonoMod.Cil;
 
 internal static class Program
 {
-    private static int Main()
+    private static int Main(string[] args)
     {
         VerifyDependencyResolver();
         string projectDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
@@ -22,15 +24,13 @@ internal static class Program
         string dependencyPath = Path.Combine(projectDirectory, "ModDependencyFixture", "bin", configuration, "net8.0", "ModDependencyFixture.dll");
         string hookPath = Path.Combine(projectDirectory, "HookFixture", "bin", configuration, "net8.0", "HookFixture.dll");
 
-        byte[] source = File.ReadAllBytes(targetPath);
+        byte[] source = ApplyEverestStyleConstructorShape(File.ReadAllBytes(targetPath));
         string assemblyName;
         int wovenCount;
         string[] skipped;
         byte[] woven = IOSHookWeaver.WeaveAssembly(source, out assemblyName, out wovenCount, out skipped, fixtureOutput);
-        if (skipped.Length != 2 ||
-            !skipped.Any(item => item.Contains("<Module>::.cctor", StringComparison.Ordinal)) ||
-            !skipped.Any(item => item.Contains("ModuleInitializerProbe::Initialize", StringComparison.Ordinal)))
-            throw new InvalidOperationException("Only the module initializer entry points should remain direct: " + string.Join(" | ", skipped));
+        if (skipped.Length != 0)
+            throw new InvalidOperationException("The executable fixture methods should all receive hook gates: " + string.Join(" | ", skipped));
         using (Mono.Cecil.AssemblyDefinition definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(new MemoryStream(woven)))
         {
             Mono.Cecil.TypeDefinition imports = definition.MainModule.GetType("VideoNativeImportFixture");
@@ -79,6 +79,8 @@ internal static class Program
 
         IOSHookRuntime.Initialize();
         VerifyMonoModCecilBackend();
+        VerifyEverestStyleConstructor(targetAssembly);
+        VerifyHookableModuleInitializer(woven, hookPath);
         VerifyTextCopyClipboard(projectDirectory, configuration, fixtureOutput);
         VerifyCeilingUltraFastFieldGetter(projectDirectory, configuration, fixtureOutput);
         VerifyChroniaExternalLinks(projectDirectory, configuration, fixtureOutput);
@@ -267,6 +269,16 @@ internal static class Program
         object structConstructed = Activator.CreateInstance(structConstructorType, new object[] { 6 });
         int structConstructorValue = (int)structConstructorType.GetField("Value").GetValue(structConstructed);
 
+        Type refLikeConstructorType = targetAssembly.GetType("RefLikeConstructorTarget", true);
+        ConstructorInfo refLikeConstructor = refLikeConstructorType.GetConstructor(new[] { typeof(int), typeof(bool).MakeByRefType() });
+        Delegate refLikeConstructorHook = Delegate.CreateDelegate(hookAssembly.GetType("HookRefLikeConstructor", true),
+            crossHooksType.GetMethod("OnRefLikeConstructor"), true);
+        IOSHookRuntime.AddOn(refLikeConstructor, refLikeConstructorHook);
+        int refLikeConstructorValue = (int)targetAssembly.GetType("RefLikeConstructorProbe", true)
+            .GetMethod("CreateAndRead").Invoke(null, new object[] { 31 });
+        int refLikeConstructorCalls = ReadStatic<int>(crossHooksType, "RefLikeConstructorCalls");
+        IOSHookRuntime.RemoveOn(refLikeConstructor, refLikeConstructorHook);
+
         Type branchConstructorType = targetAssembly.GetType("BranchCtorTarget", true);
         ConstructorInfo branchConstructor = branchConstructorType.GetConstructor(new[] { typeof(bool) });
         Delegate branchConstructorHook = Delegate.CreateDelegate(targetAssembly.GetType("HookBranchCtor", true),
@@ -303,6 +315,7 @@ internal static class Program
         AssertEqual("value-type instance and detour", "115/34/34",
             $"{structSpan}/{structDetourResult}/{structDetourValue}");
         AssertEqual("value-type constructor hook", "13", structConstructorValue.ToString());
+        AssertEqual("byref-like constructor hook without boxing", "31/1", $"{refLikeConstructorValue}/{refLikeConstructorCalls}");
         AssertEqual("branchy class constructor hook", "13/123", $"{branchBaseValue}/{branchValue}");
         AssertEqual("generic chained class constructor hook", "29/1", $"{genericChainedBaseValue}/{genericChainedValue}");
         AssertEqual("generic targets", "31/17/23", $"{genericTypeRef}/{genericMethodRef}/{genericCombinedRef}");
@@ -328,30 +341,192 @@ internal static class Program
         AssertEqual("rewritten Windows HLS import remains hookable", "007F7F86/1", $"{colorHookValue:X8}/{colorHookCalls}");
         AssertEqual("Everest legacy On removal", "007F7F7F", colorAfterRemoval.ToString("X8"));
 
-        Console.WriteLine("Typed hook smoke passed: woven=" + wovenCount + "; patched Everest On/IL integration and removal; open generic IL, reflected On hooks, and detours across generic methods and declaring types; native decoder imports; hookable Windows HLS import shim; app-bundle and in-memory mod dependency resolution; ref-return, exact ref-readonly modifiers, in/ref, Span, pointer and function-pointer signatures; value-type instance detours and constructors; branchy and generic constructor chains; static constructors; generic type/method combinations; reflected callbacks; and cross-load-context dispatch.");
+        Console.WriteLine("Typed hook smoke passed: woven=" + wovenCount + "; patched Everest On/IL integration and removal; full-body Everest constructor wrappers with branches; open generic IL, reflected On hooks, and detours across generic methods and declaring types; native decoder imports; hookable Windows HLS import shim; app-bundle and in-memory mod dependency resolution; ref-return, exact ref-readonly modifiers, in/ref, Span, pointer and function-pointer signatures; value-type instance detours and constructors; branchy and generic constructor chains; static constructors; generic type/method combinations; reflected callbacks; and cross-load-context dispatch.");
         return 0;
+    }
+
+    private static byte[] ApplyEverestStyleConstructorShape(byte[] source)
+    {
+        using (Mono.Cecil.AssemblyDefinition assembly = Mono.Cecil.AssemblyDefinition.ReadAssembly(
+            new MemoryStream(source), new Mono.Cecil.ReaderParameters { InMemory = true }))
+        {
+            Mono.Cecil.TypeDefinition type = assembly.MainModule.GetType("EverestStyleConstructorTarget");
+            Mono.Cecil.MethodDefinition constructor = type.Methods.Single(method => method.IsConstructor && !method.IsStatic);
+            Mono.Cecil.MethodDefinition original = type.Methods.Single(method => method.Name == "orig_ctor");
+            Instruction baseCall = constructor.Body.Instructions.First(instruction =>
+                instruction.Operand is Mono.Cecil.MethodReference called &&
+                called.Name == ".ctor" && called.DeclaringType.FullName == "System.Object");
+            Instruction loadThis = baseCall.Previous;
+            if (loadThis == null || loadThis.OpCode.Code != Code.Ldarg_0)
+                throw new InvalidOperationException("The constructor fixture no longer has a recognizable Object initializer.");
+
+            constructor.Body.Instructions.Remove(loadThis);
+            constructor.Body.Instructions.Remove(baseCall);
+            Instruction aliasCall = constructor.Body.Instructions.First(instruction =>
+                instruction.Operand is Mono.Cecil.MethodReference called && called.Name == "orig_ctor");
+            aliasCall.OpCode = OpCodes.Callvirt;
+
+            Instruction originalFirst = original.Body.Instructions[0];
+            ILProcessor originalIl = original.Body.GetILProcessor();
+            originalIl.InsertBefore(originalFirst, originalIl.Create(OpCodes.Ldarg_0));
+            originalIl.InsertBefore(originalFirst, originalIl.Create(OpCodes.Call,
+                assembly.MainModule.ImportReference((Mono.Cecil.MethodReference)baseCall.Operand)));
+
+            Mono.Cecil.TypeDefinition directType = assembly.MainModule.GetType("DirectBranchConstructorTarget");
+            Mono.Cecil.MethodDefinition directConstructor = directType.Methods.Single(method => method.IsConstructor && !method.IsStatic);
+            Instruction directBaseCall = directConstructor.Body.Instructions.First(instruction =>
+                instruction.Operand is Mono.Cecil.MethodReference called &&
+                called.Name == ".ctor" && called.DeclaringType.FullName == "System.Object");
+            Instruction directLoadThis = directBaseCall.Previous;
+            directConstructor.Body.Instructions.Remove(directLoadThis);
+            directConstructor.Body.Instructions.Remove(directBaseCall);
+            Instruction valueStore = directConstructor.Body.Instructions.First(instruction =>
+                instruction.OpCode.Code == Code.Stfld &&
+                instruction.Operand is Mono.Cecil.FieldReference field && field.Name == "Value");
+            Instruction truePathStart = valueStore.Previous.Previous;
+            ILProcessor directIl = directConstructor.Body.GetILProcessor();
+            directIl.InsertBefore(truePathStart, directIl.Create(OpCodes.Ldarg_0));
+            directIl.InsertBefore(truePathStart, directIl.Create(OpCodes.Call,
+                assembly.MainModule.ImportReference((Mono.Cecil.MethodReference)directBaseCall.Operand)));
+
+            using (MemoryStream output = new MemoryStream())
+            {
+                assembly.Write(output);
+                return output.ToArray();
+            }
+        }
+    }
+
+    private static void VerifyEverestStyleConstructor(Assembly targetAssembly)
+    {
+        Type targetType = targetAssembly.GetType("EverestStyleConstructorTarget", true);
+        ConstructorInfo constructor = targetType.GetConstructor(new[] { typeof(bool), typeof(int) });
+        Type hooksType = targetAssembly.GetType("EverestStyleConstructorHooks", true);
+        Type hookType = targetAssembly.GetType("HookEverestStyleConstructor", true);
+        Delegate hook = Delegate.CreateDelegate(hookType, hooksType.GetMethod("OnConstructor"), true);
+        IOSHookRuntime.AddOn(constructor, hook);
+
+        object instance = Activator.CreateInstance(targetType, new object[] { true, 41 });
+        AssertEqual("Everest wrapper constructor body and finally", "41/5/1/1",
+            $"{targetType.GetField("Value").GetValue(instance)}/{targetType.GetField("PostValue").GetValue(instance)}/{ReadStatic<int>(hooksType, "Calls")}/{ReadStatic<int>(targetType, "CleanupCalls")}");
+
+        bool originalBranchPreserved = false;
+        try
+        {
+            Activator.CreateInstance(targetType, new object[] { false, 41 });
+        }
+        catch (Exception exception)
+        {
+            while (exception is TargetInvocationException invocation && invocation.InnerException != null)
+                exception = invocation.InnerException;
+            if (!(exception is InvalidOperationException)) throw;
+            originalBranchPreserved = true;
+        }
+        IOSHookRuntime.RemoveOn(constructor, hook);
+        if (!originalBranchPreserved)
+            throw new InvalidOperationException("The hooked Everest-style constructor did not preserve its throwing branch.");
+        AssertEqual("Everest wrapper constructor finally on throw", "2",
+            ReadStatic<int>(targetType, "CleanupCalls").ToString());
+
+        Type directType = targetAssembly.GetType("DirectBranchConstructorTarget", true);
+        ConstructorInfo directConstructor = directType.GetConstructor(new[] { typeof(bool), typeof(int) });
+        Type directHooksType = targetAssembly.GetType("DirectBranchConstructorHooks", true);
+        Type directHookType = targetAssembly.GetType("HookDirectBranchConstructor", true);
+        Delegate directHook = Delegate.CreateDelegate(directHookType,
+            directHooksType.GetMethod("OnConstructor"), true);
+        IOSHookRuntime.AddOn(directConstructor, directHook);
+        object directInstance = Activator.CreateInstance(directType, new object[] { true, 53 });
+        AssertEqual("whole-body direct initializer constructor", "53/5/1",
+            $"{directType.GetField("Value").GetValue(directInstance)}/{directType.GetField("PostValue").GetValue(directInstance)}/{ReadStatic<int>(directHooksType, "Calls")}");
+        IOSHookRuntime.RemoveOn(directConstructor, directHook);
     }
 
     private static void VerifyMonoModCecilBackend()
     {
         string monoModUtilsPath = typeof(MonoMod.Utils.DynamicMethodDefinition).Assembly.Location;
-        byte[] original = File.ReadAllBytes(monoModUtilsPath);
-        byte[] woven = IOSHookWeaver.WeaveAssembly(original, out string assemblyName, out int wovenCount,
-            out string[] skipped, Path.GetDirectoryName(monoModUtilsPath));
-        if (assemblyName != "MonoMod.Utils" || wovenCount != 0 || skipped.Length != 0 || !original.SequenceEqual(woven))
-            throw new InvalidOperationException("MonoMod.Utils hook-backend infrastructure must stay byte-for-byte unchanged.");
+        string runtimeDirectory = Path.GetDirectoryName(monoModUtilsPath);
+        string probeDirectory = Path.Combine(Path.GetTempPath(), "CelesteIOSWovenMonoMod-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(probeDirectory);
+        try
+        {
+            foreach (string path in Directory.GetFiles(runtimeDirectory, "*.dll", SearchOption.TopDirectoryOnly)
+            .Where(path => Path.GetFileName(path).StartsWith("Mono.Cecil", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetFileName(path).StartsWith("MonoMod", StringComparison.OrdinalIgnoreCase)))
+            {
+                byte[] original = File.ReadAllBytes(path);
+                byte[] woven = IOSHookWeaver.WeaveAssembly(original, out string assemblyName, out int wovenCount,
+                    out string[] skipped, runtimeDirectory);
+                if (wovenCount == 0 || skipped.Length != 0)
+                    throw new InvalidOperationException(assemblyName + " infrastructure did not receive complete hook gates: " +
+                        string.Join(" | ", skipped));
+                File.WriteAllBytes(Path.Combine(probeDirectory, Path.GetFileName(path)), woven);
+            }
+            if (!File.Exists(Path.Combine(probeDirectory, "MonoMod.Utils.dll")) ||
+                !File.Exists(Path.Combine(probeDirectory, "Mono.Cecil.dll")))
+                throw new FileNotFoundException("The complete woven Cecil hook backend was not staged beside Everest.", runtimeDirectory);
 
-        MonoMod.Switches.SetSwitchValue("DMDType", "cecil");
-        using MonoMod.Utils.DynamicMethodDefinition dmd = new MonoMod.Utils.DynamicMethodDefinition(
-            "ios_dmd_smoke", typeof(int), Type.EmptyTypes);
-        dmd.GetILGenerator().Emit(System.Reflection.Emit.OpCodes.Ldc_I4, 42);
-        dmd.GetILGenerator().Emit(System.Reflection.Emit.OpCodes.Ret);
-        MethodInfo generated = dmd.Generate();
-        object answer = generated.Invoke(null, null);
-        if (!(answer is int value) || value != 42)
-            throw new InvalidOperationException("MonoMod's Cecil DynamicMethodDefinition backend returned an unexpected value.");
+            string projectDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
+            string configuration = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar)).Name;
+            string probeAssembly = Path.Combine(projectDirectory, "WovenInfrastructureProbe", "bin", configuration, "net8.0", "WovenInfrastructureProbe.dll");
+            ProcessStartInfo startInfo = new ProcessStartInfo("dotnet")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add(probeAssembly);
+            startInfo.ArgumentList.Add(probeDirectory);
+            startInfo.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
+            using Process process = Process.Start(startInfo);
+            Task<string> standardOutput = process.StandardOutput.ReadToEndAsync();
+            Task<string> standardError = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(120000))
+            {
+                process.Kill(true);
+                throw new TimeoutException("The woven MonoMod backend probe exceeded two minutes.");
+            }
+            Task.WaitAll(standardOutput, standardError);
+            if (process.ExitCode != 0)
+                throw new InvalidOperationException("The woven MonoMod backend probe failed: " + standardError.Result + standardOutput.Result);
+            Console.WriteLine(standardOutput.Result.Trim());
+        }
+        finally
+        {
+            try { if (Directory.Exists(probeDirectory)) Directory.Delete(probeDirectory, true); }
+            catch { }
+        }
+    }
 
-        Console.WriteLine("MonoMod Cecil backend smoke passed: runtime infrastructure preserved and generated method executed.");
+    private static void VerifyHookableModuleInitializer(byte[] wovenTarget, string hookPath)
+    {
+        AssemblyLoadContext targetContext = new FixtureLoadContext();
+        Assembly targetAssembly = targetContext.LoadFromStream(new MemoryStream(wovenTarget));
+        int moduleInitializerToken;
+        using (Mono.Cecil.AssemblyDefinition definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(new MemoryStream(wovenTarget)))
+        {
+            Mono.Cecil.MethodDefinition initializer = definition.MainModule.GetType("<Module>").Methods
+                .FirstOrDefault(method => method.Name == ".cctor");
+            moduleInitializerToken = initializer?.MetadataToken.ToInt32() ?? 0;
+        }
+        MethodBase moduleInitializer = moduleInitializerToken == 0
+            ? null
+            : targetAssembly.ManifestModule.ResolveMethod(moduleInitializerToken);
+        if (moduleInitializer == null)
+            throw new MissingMethodException("The woven target module did not expose its module initializer.");
+
+        AssemblyLoadContext hookContext = new HookLoadContext(targetAssembly);
+        Assembly hookAssembly = hookContext.LoadFromAssemblyPath(hookPath);
+        Delegate hook = Delegate.CreateDelegate(hookAssembly.GetType("HookModuleInitializer", true),
+            hookAssembly.GetType("CrossHooks", true).GetMethod("OnModuleInitializer"), true);
+        IOSHookRuntime.AddOn(moduleInitializer, hook);
+        System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(targetAssembly.ManifestModule.ModuleHandle);
+
+        int calls = (int)hookAssembly.GetType("CrossHooks", true).GetField("ModuleInitializerCalls").GetValue(null);
+        int value = ReadStatic<int>(targetAssembly.GetType("ModuleInitializerProbe", true), "Value");
+        AssertEqual("module initializer On hook count", "1", calls.ToString());
+        AssertEqual("module initializer original body", "73", value.ToString());
+        Console.WriteLine("Module initializer hook smoke passed: bootstrap direct call and post-initialization hook both ran.");
     }
 
     private static Assembly LoadEverestRuntimeAssembly(string projectDirectory, string fixtureOutput, string gameAssemblyPath)
@@ -721,7 +896,7 @@ CycleB:
     {
         private readonly Assembly targetAssembly;
 
-        public HookLoadContext(Assembly targetAssembly) : base("ios-hook-smoke-hook")
+        public HookLoadContext(Assembly targetAssembly) : base("ios-hook-smoke-hook-" + Guid.NewGuid().ToString("N"))
         {
             this.targetAssembly = targetAssembly;
         }
@@ -733,4 +908,5 @@ CycleB:
             catch { return null; }
         }
     }
+
 }

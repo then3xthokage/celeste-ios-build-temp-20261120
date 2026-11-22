@@ -23,11 +23,11 @@ internal static class RuntimeProbe
             throw new FileNotFoundException("The hook fixture was not embedded in the iOS smoke app.");
         using MemoryStream fixtureImage = new MemoryStream();
         fixtureResource.CopyTo(fixtureImage);
-        byte[] original = fixtureImage.ToArray();
+        byte[] original = ApplyEverestStyleConstructorShape(fixtureImage.ToArray());
         byte[] woven = IOSHookWeaver.WeaveAssembly(original, out string assemblyName, out int wovenCount,
             out string[] skipped, AppContext.BaseDirectory);
-        if (assemblyName != "ProbeFixture" || wovenCount == 0 || skipped.Length != 2)
-            throw new InvalidOperationException("The iOS load-time weaver did not preserve only the module initializer entry points.");
+        if (assemblyName != "ProbeFixture" || wovenCount == 0 || skipped.Length != 0)
+            throw new InvalidOperationException("The iOS load-time weaver did not gate every executable fixture method: " + string.Join(" | ", skipped));
 
         Assembly fixture = Assembly.Load(woven);
         IOSILHookRuntime.RegisterAssemblySnapshot(fixture, woven);
@@ -36,6 +36,23 @@ internal static class RuntimeProbe
         Type moduleState = fixture.GetType("ProbeModuleInitializer", throwOnError: true);
         if ((int)moduleState.GetField("Value").GetValue(null) != 73)
             throw new InvalidOperationException("The downloaded assembly's module initializer did not run before hook dispatch.");
+
+        VerifyEverestStyleConstructor(fixture);
+
+        Type refLikeConstructorType = fixture.GetType("ProbeRefLikeConstructorTarget", throwOnError: true);
+        ConstructorInfo refLikeConstructor = refLikeConstructorType.GetConstructor(
+            new[] { typeof(int), typeof(bool).MakeByRefType() });
+        Type refLikeHookType = fixture.GetType("ProbeRefLikeConstructorHook", throwOnError: true);
+        Type probeHooksType = fixture.GetType("ProbeHooks", throwOnError: true);
+        Delegate refLikeHook = Delegate.CreateDelegate(refLikeHookType,
+            probeHooksType.GetMethod("OnRefLikeConstructor", BindingFlags.Public | BindingFlags.Static));
+        IOSHookRuntime.AddOn(refLikeConstructor, refLikeHook);
+        Type refLikeProbeType = fixture.GetType("ProbeRefLikeConstructor", throwOnError: true);
+        AssertEqual("Byref-like constructor On hook on iOS interpreter", 29,
+            refLikeProbeType.GetMethod("CreateAndRead").Invoke(null, new object[] { 29 }));
+        AssertEqual("Byref-like constructor callback on iOS interpreter", 1,
+            probeHooksType.GetField("RefLikeConstructorCalls").GetValue(null));
+        IOSHookRuntime.RemoveOn(refLikeConstructor, refLikeHook);
 
         Type targetType = fixture.GetType("ProbeTarget", throwOnError: true);
         MethodInfo add = targetType.GetMethod("Add", BindingFlags.Public | BindingFlags.Static);
@@ -190,6 +207,75 @@ internal static class RuntimeProbe
         IOSHookRuntime.RemoveDetour(openInstanceEchoTarget, openInstanceDetourIdentity);
         AssertEqual("Open generic instance detour removal on iOS interpreter", 71,
             closedInstanceEchoTarget.Invoke(genericInstanceTarget, new object[] { 71 }));
+    }
+
+    private static byte[] ApplyEverestStyleConstructorShape(byte[] source)
+    {
+        using (Mono.Cecil.AssemblyDefinition assembly = Mono.Cecil.AssemblyDefinition.ReadAssembly(
+            new MemoryStream(source), new Mono.Cecil.ReaderParameters { InMemory = true }))
+        {
+            Mono.Cecil.TypeDefinition type = assembly.MainModule.GetType("ProbeEverestStyleConstructorTarget");
+            Mono.Cecil.MethodDefinition constructor = type.Methods.Single(method => method.IsConstructor && !method.IsStatic);
+            Mono.Cecil.MethodDefinition original = type.Methods.Single(method => method.Name == "orig_ctor");
+            Instruction baseCall = constructor.Body.Instructions.First(instruction =>
+                instruction.Operand is Mono.Cecil.MethodReference called &&
+                called.Name == ".ctor" && called.DeclaringType.FullName == "System.Object");
+            Instruction loadThis = baseCall.Previous;
+            if (loadThis == null || loadThis.OpCode.Code != Code.Ldarg_0)
+                throw new InvalidOperationException("The iOS constructor fixture no longer has a recognizable Object initializer.");
+
+            constructor.Body.Instructions.Remove(loadThis);
+            constructor.Body.Instructions.Remove(baseCall);
+            Instruction aliasCall = constructor.Body.Instructions.First(instruction =>
+                instruction.Operand is Mono.Cecil.MethodReference called && called.Name == "orig_ctor");
+            aliasCall.OpCode = OpCodes.Callvirt;
+
+            Instruction originalFirst = original.Body.Instructions[0];
+            ILProcessor originalIl = original.Body.GetILProcessor();
+            originalIl.InsertBefore(originalFirst, originalIl.Create(OpCodes.Ldarg_0));
+            originalIl.InsertBefore(originalFirst, originalIl.Create(OpCodes.Call,
+                assembly.MainModule.ImportReference((Mono.Cecil.MethodReference)baseCall.Operand)));
+
+            using (MemoryStream output = new MemoryStream())
+            {
+                assembly.Write(output);
+                return output.ToArray();
+            }
+        }
+    }
+
+    private static void VerifyEverestStyleConstructor(Assembly fixture)
+    {
+        Type targetType = fixture.GetType("ProbeEverestStyleConstructorTarget", throwOnError: true);
+        ConstructorInfo constructor = targetType.GetConstructor(new[] { typeof(bool), typeof(int) });
+        Type hooksType = fixture.GetType("ProbeEverestStyleConstructorHooks", throwOnError: true);
+        Type hookType = fixture.GetType("ProbeEverestStyleConstructorHook", throwOnError: true);
+        Delegate hook = Delegate.CreateDelegate(hookType,
+            hooksType.GetMethod("OnConstructor", BindingFlags.Public | BindingFlags.Static));
+        IOSHookRuntime.AddOn(constructor, hook);
+
+        object instance = Activator.CreateInstance(targetType, new object[] { true, 41 });
+        AssertEqual("Everest wrapper constructor body and finally on iOS interpreter", "41/5/1/1",
+            $"{targetType.GetField("Value").GetValue(instance)}/{targetType.GetField("PostValue").GetValue(instance)}/" +
+            $"{hooksType.GetField("Calls").GetValue(null)}/{targetType.GetField("CleanupCalls").GetValue(null)}");
+
+        bool originalBranchPreserved = false;
+        try
+        {
+            Activator.CreateInstance(targetType, new object[] { false, 41 });
+        }
+        catch (Exception exception)
+        {
+            while (exception is TargetInvocationException invocation && invocation.InnerException != null)
+                exception = invocation.InnerException;
+            if (!(exception is InvalidOperationException)) throw;
+            originalBranchPreserved = true;
+        }
+        IOSHookRuntime.RemoveOn(constructor, hook);
+        if (!originalBranchPreserved)
+            throw new InvalidOperationException("The iOS hook gate did not preserve the Everest-style constructor branch.");
+        AssertEqual("Everest wrapper constructor finally on throw on iOS interpreter", 2,
+            targetType.GetField("CleanupCalls").GetValue(null));
     }
 
     private static void VerifyCecilGeneratedMethod()

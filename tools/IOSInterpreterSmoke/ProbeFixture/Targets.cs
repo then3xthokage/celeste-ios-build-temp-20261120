@@ -4,6 +4,9 @@ public delegate int ProbeAddOriginal(int left, int right);
 public delegate int ProbeAddHook(ProbeAddOriginal original, int left, int right);
 public delegate ref T ProbeGenericEchoOriginal<T>(ref T value);
 public delegate int LuaCallbackSmoke(int value);
+public delegate void ProbeRefLikeConstructorOriginal(ref ProbeRefLikeConstructorTarget target, int value, out bool initialized);
+public delegate void ProbeRefLikeConstructorHook(ProbeRefLikeConstructorOriginal original,
+    ref ProbeRefLikeConstructorTarget target, int value, out bool initialized);
 
 public interface ILuaClassSmoke
 {
@@ -24,6 +27,74 @@ public static class ProbeTarget
 {
     public static int Add(int left, int right) => left + right;
     public static int Constant() => 5;
+}
+
+public ref struct ProbeRefLikeConstructorTarget
+{
+    private int value;
+
+    public ProbeRefLikeConstructorTarget(int initialValue, out bool initialized)
+    {
+        value = initialValue;
+        initialized = true;
+    }
+
+    public int Value => value;
+}
+
+public static class ProbeRefLikeConstructor
+{
+    public static int CreateAndRead(int value)
+    {
+        ProbeRefLikeConstructorTarget target = new ProbeRefLikeConstructorTarget(value, out bool initialized);
+        return initialized ? target.Value : -1;
+    }
+}
+
+public sealed class ProbeEverestStyleConstructorTarget
+{
+    public int Value;
+    public int PostValue;
+    public static int CleanupCalls;
+
+    public ProbeEverestStyleConstructorTarget(bool initialize, int value)
+    {
+        try
+        {
+            if (initialize)
+            {
+                orig_ctor(value);
+                PostValue = 4;
+                return;
+            }
+            throw new InvalidOperationException("constructor branch failed");
+        }
+        finally
+        {
+            CleanupCalls++;
+        }
+    }
+
+    public void orig_ctor(int value) => Value = value;
+}
+
+public delegate void ProbeEverestStyleConstructorOriginal(
+    ProbeEverestStyleConstructorTarget target, bool initialize, int value);
+public delegate void ProbeEverestStyleConstructorHook(
+    ProbeEverestStyleConstructorOriginal original, ProbeEverestStyleConstructorTarget target,
+    bool initialize, int value);
+
+public static class ProbeEverestStyleConstructorHooks
+{
+    public static int Calls;
+
+    public static void OnConstructor(ProbeEverestStyleConstructorOriginal original,
+        ProbeEverestStyleConstructorTarget target, bool initialize, int value)
+    {
+        Calls++;
+        original(target, initialize, value);
+        target.PostValue++;
+    }
 }
 
 public static class ProbeGenericTypeTarget<T>
@@ -57,8 +128,16 @@ public static class ProbeHooks
     public static int GenericUntypedMethodHookCalls;
     public static int GenericMethodHookCalls;
     public static int GenericMethodDetourCalls;
+    public static int RefLikeConstructorCalls;
 
     public static int Add(ProbeAddOriginal original, int left, int right) => original(left, right) + 5;
+
+    public static void OnRefLikeConstructor(ProbeRefLikeConstructorOriginal original,
+        ref ProbeRefLikeConstructorTarget target, int value, out bool initialized)
+    {
+        RefLikeConstructorCalls++;
+        original(ref target, value, out initialized);
+    }
 
     public static string OnGenericType<T>()
     {

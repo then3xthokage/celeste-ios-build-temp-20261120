@@ -10,6 +10,11 @@ public unsafe delegate int CrossHookFunctionPointer(OrigFunctionPointer orig, Te
 public delegate int CrossHookAddByRef(OrigAddByRef orig, TestTarget target, ref int input);
 public delegate int CrossHookAddIn(OrigAddIn orig, TestTarget target, in int input);
 public delegate ref readonly int CrossHookReadOnlyRef(OrigReadOnlyRef orig, TestTarget target);
+public delegate void OrigModuleInitializer();
+public delegate void HookModuleInitializer(OrigModuleInitializer orig);
+public delegate void OrigRefLikeConstructor(ref RefLikeConstructorTarget target, int initialValue, out bool initialized);
+public delegate void HookRefLikeConstructor(OrigRefLikeConstructor orig, ref RefLikeConstructorTarget target,
+    int initialValue, out bool initialized);
 public delegate ref T GenericTypeOrig<T>(GenericRefTarget<T> target);
 public delegate ref T GenericTypeHook<T>(GenericTypeOrig<T> orig, GenericRefTarget<T> target);
 public delegate ref T GenericMethodOrig<T>(ref T input);
@@ -28,6 +33,21 @@ public static class CrossHooks
     public static int GenericDetourCalls;
     public static int InCalls;
     public static int ReadOnlyCalls;
+    public static int ModuleInitializerCalls;
+    public static int RefLikeConstructorCalls;
+
+    public static void OnModuleInitializer(OrigModuleInitializer orig)
+    {
+        ModuleInitializerCalls++;
+        orig();
+    }
+
+    public static void OnRefLikeConstructor(OrigRefLikeConstructor orig, ref RefLikeConstructorTarget target,
+        int initialValue, out bool initialized)
+    {
+        RefLikeConstructorCalls++;
+        orig(ref target, initialValue, out initialized);
+    }
 
     public static unsafe int OnFunctionPointer(OrigFunctionPointer orig, TestTarget target,
         delegate*<int, int> function, int input) => orig(target, function, input) + 100;

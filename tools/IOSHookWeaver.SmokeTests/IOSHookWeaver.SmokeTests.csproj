@@ -26,6 +26,7 @@
     <ProjectReference Include="TextCopyFixture/TextCopyFixture.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="CeilingUltraFixture/CeilingUltraFixture.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="ChroniaHelperFixture/ChroniaHelperFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="WovenInfrastructureProbe/WovenInfrastructureProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="../../Everest/Celeste.Mod.mm/Celeste.Mod.mm.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

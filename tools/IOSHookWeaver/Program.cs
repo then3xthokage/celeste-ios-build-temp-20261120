@@ -250,20 +250,6 @@ public static class IOSHookWeaver
         }))
         using (MemoryStream output = new MemoryStream())
         {
-            // MonoMod.Utils supplies MonoMod's Cecil-backed DynamicMethodDefinition
-            // code generator. Its methods are created and loaded while Everest is
-            // initializing the hook backend, so routing its own type initializers
-            // through the not-yet-ready dispatcher can fail before the game starts.
-            // Keep this runtime infrastructure pristine; game, Everest, and mod
-            // assemblies still receive the full hook gates below.
-            if (IsHookBackendInfrastructure(assembly.Name.Name))
-            {
-                assemblyName = assembly.Name.Name;
-                woven = 0;
-                skippedMethods = Array.Empty<string>();
-                return input;
-            }
-
             PatchIOSNativeImports(assembly.MainModule, assembly.Name.Name);
             if (string.Equals(assembly.Name.Name, "TextCopy", StringComparison.OrdinalIgnoreCase))
                 PatchTextCopyClipboard(assembly.MainModule);
@@ -547,32 +533,14 @@ public static class IOSHookWeaver
     {
         if (IsBackendGeneratedMethod(method))
             return "generated iOS hook backend method remains direct";
-        if (method.DeclaringType.Name == "<Module>" && method.IsConstructor && method.IsStatic)
-            return "module initializer must run before the iOS hook dispatcher is initialized";
-        if (method.CustomAttributes.Any(attribute => attribute.AttributeType.FullName == "System.Runtime.CompilerServices.ModuleInitializerAttribute"))
-            return "module initializer entry point must run before the iOS hook dispatcher is initialized";
-        // MonoMod's portable DMD backend calls these methods through a closed
-        // generic self type. Keeping this tiny dispatch trampoline unmodified
-        // avoids an AOT generic handle edge case while preserving the original
-        // generated-code backend behavior.
-        if (method.DeclaringType.FullName == "MonoMod.Utils.DMDGenerator`1" && method.Name == "Generate")
-            return "MonoMod DMD generic dispatch stays direct for AOT generic method compatibility";
         if (!method.HasBody || method.Body == null || method.Body.Instructions.Count == 0 ||
             method.IsAbstract || method.IsPInvokeImpl)
             return "method has no movable managed body";
-        if (method.IsConstructor && !method.IsStatic && !method.DeclaringType.IsValueType && FindConstructorChainCall(method) < 0)
-            return "constructor chain call is not a straight-line base/this initializer";
         if (method.CallingConvention == MethodCallingConvention.VarArg) return "varargs cannot be boxed for managed dispatch";
         bool requiresTypedDispatch = RequiresTypedDispatch(method);
         if (requiresTypedDispatch && !CanUseTypedDispatch(method))
             return "signature requires a typed adapter but contains open generic parameters";
         return null;
-    }
-
-    private static bool IsHookBackendInfrastructure(string assemblyName)
-    {
-        return assemblyName.StartsWith("Mono.Cecil", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(assemblyName, "MonoMod.Utils", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsBackendGeneratedMethod(MethodDefinition method)
@@ -584,7 +552,8 @@ public static class IOSHookWeaver
 
     private static bool RequiresTypedDispatch(MethodDefinition method)
     {
-        return IsByReferenceSignatureType(method.ReturnType) || ContainsUnsupportedType(method.ReturnType) ||
+        return (!method.IsStatic && method.DeclaringType.IsValueType && method.DeclaringType.IsByReferenceLike()) ||
+            IsByReferenceSignatureType(method.ReturnType) || ContainsUnsupportedType(method.ReturnType) ||
             method.HasParameters && method.Parameters.Any(parameter => ContainsUnsupportedType(parameter.ParameterType));
     }
 
@@ -629,8 +598,11 @@ public static class IOSHookWeaver
     {
         string cloneName = IOSHookIdentity.OriginalMethodName(method);
         string fieldName = IOSHookIdentity.GateFieldName(method);
-        return method.DeclaringType.Methods.Any(candidate => candidate.Name == cloneName) &&
-            method.DeclaringType.Fields.Any(candidate => candidate.Name == fieldName);
+        TypeDefinition owner = method.DeclaringType.Name == "<Module>"
+            ? method.Module.GetType(IOSHookIdentity.ModuleOriginalContainerName(method))
+            : method.DeclaringType;
+        return owner != null && owner.Methods.Any(candidate => candidate.Name == cloneName) &&
+            owner.Fields.Any(candidate => candidate.Name == fieldName);
     }
 
     private static void Weave(MethodDefinition method)
@@ -644,6 +616,11 @@ public static class IOSHookWeaver
             ? CreateTypedDelegateType(method, "__ios_typed_delegate_" + id)
             : null;
 
+        // Split a simple initializer so it runs before On hooks. Everest may
+        // also generate constructors whose initializer is an orig_ctor alias,
+        // or whose branches / exception regions cross that point. Those stay
+        // as a whole-body continuation: the cloned IL keeps its original CFG
+        // and EH regions, and the gate still exposes the constructor normally.
         int constructorChainIndex = method.IsConstructor ? FindConstructorChainCall(method) : -1;
         MethodDefinition original = CloneOriginal(method, originalName);
         if (typedDelegate != null)
@@ -656,11 +633,17 @@ public static class IOSHookWeaver
         if (HasValueTypeThis(method))
             CreateValueTypeInvoker(method, original, "__ios_original_static_" + id);
 
+        TypeDefinition gateOwner = method.DeclaringType.Name == "<Module>"
+            ? GetModuleOriginalContainer(method)
+            : method.DeclaringType;
+        FieldAttributes gateAttributes = method.DeclaringType.Name == "<Module>"
+            ? FieldAttributes.Assembly | FieldAttributes.Static
+            : FieldAttributes.Private | FieldAttributes.Static;
         FieldDefinition gate = new FieldDefinition(
             gateName,
-            FieldAttributes.Private | FieldAttributes.Static,
+            gateAttributes,
             method.Module.TypeSystem.Boolean);
-        type.Fields.Add(gate);
+        gateOwner.Fields.Add(gate);
         FieldDefinition genericOpenGate = CreateGenericOpenGateField(method);
         MethodBody gateBody = typedDelegate == null
             ? CreateGateBody(method, original, gate, genericOpenGate)
@@ -885,11 +868,10 @@ public static class IOSHookWeaver
         for (int i = 0; i < method.Body.Instructions.Count; i++)
         {
             Instruction instruction = method.Body.Instructions[i];
-            if (instruction.OpCode.Code != Code.Call || !(instruction.Operand is MethodReference called) || called.Name != ".ctor")
+            if ((instruction.OpCode.Code != Code.Call && instruction.OpCode.Code != Code.Callvirt) ||
+                !(instruction.Operand is MethodReference called))
                 continue;
-            string calledTypeName = GetGenericDefinitionFullName(called.DeclaringType);
-            if (calledTypeName == method.DeclaringType.FullName ||
-                calledTypeName == GetGenericDefinitionFullName(method.DeclaringType.BaseType))
+            if (IsConstructorInitializationCall(method, called))
             {
                 index = i;
                 break;
@@ -926,6 +908,25 @@ public static class IOSHookWeaver
                 return -1;
         }
         return index;
+    }
+
+    private static bool IsConstructorInitializationCall(MethodDefinition method, MethodReference called)
+    {
+        string calledTypeName = GetGenericDefinitionFullName(called.DeclaringType);
+        if (called.Name == ".ctor")
+        {
+            return calledTypeName == method.DeclaringType.FullName ||
+                calledTypeName == GetGenericDefinitionFullName(method.DeclaringType.BaseType);
+        }
+
+        // Everest's MonoMod patcher can lower a constructor into a forwarding
+        // call to its generated orig_ctor body. In those assemblies the actual
+        // base/this initialization is inside that forwarding method, so this
+        // call is the initialization boundary the iOS gate must preserve.
+        // Treat only a same-type Everest constructor alias as that boundary;
+        // ordinary helper calls remain in the hookable body.
+        return calledTypeName == method.DeclaringType.FullName &&
+            (called.Name == "orig_ctor" || called.Name.StartsWith("orig_ctor_", StringComparison.Ordinal));
     }
 
     private static string GetGenericDefinitionFullName(TypeReference type)
@@ -988,13 +989,19 @@ public static class IOSHookWeaver
 
     private static MethodDefinition CloneOriginal(MethodDefinition source, string name)
     {
-        MethodAttributes attributes = MethodAttributes.Private | MethodAttributes.HideBySig;
+        MethodAttributes visibility = source.DeclaringType.Name == "<Module>"
+            ? MethodAttributes.Public
+            : MethodAttributes.Private;
+        MethodAttributes attributes = visibility | MethodAttributes.HideBySig;
         if (source.IsStatic) attributes |= MethodAttributes.Static;
         MethodDefinition clone = new MethodDefinition(name, attributes, source.Module.TypeSystem.Void)
         {
             ImplAttributes = source.ImplAttributes & ~(MethodImplAttributes.Runtime | MethodImplAttributes.InternalCall | MethodImplAttributes.Native)
         };
-        source.DeclaringType.Methods.Add(clone);
+        TypeDefinition originalOwner = source.DeclaringType.Name == "<Module>"
+            ? GetModuleOriginalContainer(source)
+            : source.DeclaringType;
+        originalOwner.Methods.Add(clone);
 
         foreach (GenericParameter parameter in source.GenericParameters)
             clone.GenericParameters.Add(new GenericParameter(parameter.Name, clone) { Attributes = parameter.Attributes });
@@ -1013,6 +1020,20 @@ public static class IOSHookWeaver
 
         clone.Body = CloneBody(source, clone, parameters);
         return clone;
+    }
+
+    private static TypeDefinition GetModuleOriginalContainer(MethodDefinition source)
+    {
+        string fullName = IOSHookIdentity.ModuleOriginalContainerName(source);
+        TypeDefinition container = source.Module.GetType(fullName);
+        if (container != null) return container;
+        int separator = fullName.LastIndexOf('.');
+        container = new TypeDefinition(fullName.Substring(0, separator), fullName.Substring(separator + 1),
+            Mono.Cecil.TypeAttributes.NotPublic | Mono.Cecil.TypeAttributes.Abstract |
+            Mono.Cecil.TypeAttributes.Sealed | Mono.Cecil.TypeAttributes.Class |
+            Mono.Cecil.TypeAttributes.BeforeFieldInit, source.Module.ImportReference(typeof(object)));
+        source.Module.Types.Add(container);
+        return container;
     }
 
     private static MethodDefinition CreateValueTypeInvoker(MethodDefinition source, MethodDefinition original, string name)
@@ -1142,9 +1163,21 @@ public static class IOSHookWeaver
 
         // A static constructor is one-shot. It always enters the dispatcher so
         // registering a hook never has to write its gate field (which could run
-        // the very type initializer being hooked through reflection).
+        // the very type initializer being hooked through reflection). Before
+        // the launcher installs the dispatcher, however, it must execute its
+        // preserved body directly. This lets module and type initializers in
+        // Mono.Cecil, MonoMod.Utils, Celeste, and mods run during normal startup.
         bool alwaysDispatch = method.IsConstructor && method.IsStatic;
-        if (!alwaysDispatch)
+        if (alwaysDispatch)
+        {
+            il.Append(il.Create(OpCodes.Call, CreateCurrentDomainGetter(method.Module)));
+            il.Append(il.Create(OpCodes.Ldstr, DispatchKey));
+            il.Append(il.Create(OpCodes.Callvirt, CreateGetData(method.Module)));
+            il.Append(il.Create(OpCodes.Brtrue, dispatch));
+            il.Append(il.Create(OpCodes.Call, CreateOriginalCall(original, method)));
+            il.Append(il.Create(OpCodes.Ret));
+        }
+        else
         {
             il.Append(il.Create(OpCodes.Ldsfld, CreateGateFieldReference(gate, method)));
             il.Append(il.Create(OpCodes.Brtrue, dispatch));

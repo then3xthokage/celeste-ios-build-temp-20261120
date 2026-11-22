@@ -21,9 +21,9 @@ namespace celestemeow
             if (method == null) throw new ArgumentNullException(nameof(method));
             MethodBase definition = GetDefinition(method);
             Type declaringType = definition.DeclaringType;
-            if (declaringType == null) throw new NotSupportedException("A hook target must have a declaring type: " + method);
             string signature = definition.Module.Assembly.GetName().Name + "|" +
-                TypeName(declaringType) + "|" + (definition.IsStatic ? "static" : "instance") + "|" +
+                (declaringType == null ? "<Module>" : TypeName(declaringType)) + "|" +
+                (definition.IsStatic ? "static" : "instance") + "|" +
                 definition.Name + "|" + GenericArity(definition) + "|" +
                 ReturnType(definition) + "(" + string.Join(",", definition.GetParameters().Select(SignatureTypeName)) + ")";
             return Hash(signature);
@@ -45,6 +45,8 @@ namespace celestemeow
         internal static string TypedOriginalAdapterName(MethodBase method) => "__ios_typed_original_" + ForMethod(method);
         internal static string GenericOpenGateFieldName(MethodBase method) => "__ios_open_generic_hooked_" + ForMethod(method);
         internal static string GenericOpenGateFieldName(MethodDefinition method) => "__ios_open_generic_hooked_" + ForMethod(method);
+        internal static string ModuleOriginalContainerName(MethodBase method) => "CelesteIOS.Generated.__ios_module_original_" + ForMethod(method);
+        internal static string ModuleOriginalContainerName(MethodDefinition method) => "CelesteIOS.Generated.__ios_module_original_" + ForMethod(method);
         internal static string GateFieldName(MethodDefinition method) => "__ios_hooked_" + ForMethod(method);
         internal static string OriginalMethodName(MethodDefinition method) => "__ios_original_" + ForMethod(method);
         internal static string ValueTypeInvokerName(MethodDefinition method) => "__ios_original_static_" + ForMethod(method);

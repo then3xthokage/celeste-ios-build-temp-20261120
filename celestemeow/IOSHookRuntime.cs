@@ -316,7 +316,6 @@ namespace celestemeow
 
         public static void Initialize()
         {
-            ConfigureMonoModCecilBackend();
             AppDomain.CurrentDomain.SetData(DispatchDataKey, (Func<MethodBase, object, object[], object>)Dispatch);
             AppDomain.CurrentDomain.SetData(TypedDispatchDataKey, (Func<MethodBase, Type, Delegate>)DispatchTyped);
             AppDomain.CurrentDomain.SetData(AddOnDataKey, (Action<MethodBase, Delegate, object>)AddOn);
@@ -334,6 +333,7 @@ namespace celestemeow
             AppDomain.CurrentDomain.SetData(ILHookCountDataKey, (Func<MethodBase, int>)IOSILHookRuntime.GetHookCount);
             AppDomain.CurrentDomain.SetData(ClearDataKey, (Action)Clear);
             IOSILHookRuntime.Initialize();
+            ConfigureMonoModCecilBackend();
         }
 
         private static void ConfigureMonoModCecilBackend()
@@ -586,6 +586,20 @@ namespace celestemeow
         {
             if (target is ConstructorInfo staticConstructor && staticConstructor.IsStatic)
                 return;
+            if (target.DeclaringType == null)
+            {
+                Type container = target.Module.Assembly.GetType(IOSHookIdentity.ModuleOriginalContainerName(target), false, false);
+                FieldInfo moduleGate = container?.GetField(IOSHookIdentity.GateFieldName(target),
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                if (moduleGate == null)
+                {
+                    if (enabled)
+                        throw new MissingFieldException("The iOS hook weave did not provide a module-level gate for " + target + ".");
+                    return;
+                }
+                moduleGate.SetValue(null, enabled);
+                return;
+            }
             if (target.DeclaringType.ContainsGenericParameters)
             {
                 Type stateType = target.Module.Assembly.GetType(IOSHookIdentity.GenericGateStateTypeFullName, false, false);
@@ -667,6 +681,8 @@ namespace celestemeow
                 return false;
             Type leftType = left.DeclaringType;
             Type rightType = right.DeclaringType;
+            if (leftType == null || rightType == null)
+                return leftType == null && rightType == null;
             if (leftType.ContainsGenericParameters || rightType.ContainsGenericParameters)
                 return leftType.ContainsGenericParameters && rightType.ContainsGenericParameters && leftType.Equals(rightType);
             return leftType.Equals(rightType);
@@ -1319,6 +1335,14 @@ namespace celestemeow
                 throw new NotSupportedException("The iOS gate cannot resolve an original body for " + target + ".");
 
             string name = IOSHookIdentity.OriginalMethodName(target);
+            if (target.DeclaringType == null)
+            {
+                Type container = target.Module.Assembly.GetType(IOSHookIdentity.ModuleOriginalContainerName(target), false, false);
+                MethodInfo moduleOriginal = container?.GetMethod(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                if (moduleOriginal == null)
+                    throw new MissingMethodException("The iOS hook weave did not provide the module-level original body for " + target + ".");
+                return moduleOriginal;
+            }
             bool valueTypeInstance = !target.IsStatic && target.DeclaringType.IsValueType;
             BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic |
                 (target.IsStatic || valueTypeInstance ? BindingFlags.Static : BindingFlags.Instance);

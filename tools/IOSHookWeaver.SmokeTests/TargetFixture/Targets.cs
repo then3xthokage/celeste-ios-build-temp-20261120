@@ -143,6 +143,28 @@ public struct TestStructConstructorTarget
     public TestStructConstructorTarget(int value) => Value = value;
 }
 
+public ref struct RefLikeConstructorTarget
+{
+    private int value;
+
+    public RefLikeConstructorTarget(int initialValue, out bool initialized)
+    {
+        value = initialValue;
+        initialized = true;
+    }
+
+    public int Value => value;
+}
+
+public static class RefLikeConstructorProbe
+{
+    public static int CreateAndRead(int value)
+    {
+        RefLikeConstructorTarget target = new RefLikeConstructorTarget(value, out bool initialized);
+        return initialized ? target.Value : -1;
+    }
+}
+
 public class BranchCtorBase
 {
     public int BaseValue;
@@ -160,6 +182,84 @@ public class GenericChainedConstructor<T> : BranchCtorBase
     public T Value;
     public GenericChainedConstructor() : this(default(T), 29) { }
     public GenericChainedConstructor(T value, int baseValue) : base(baseValue) => Value = value;
+}
+
+public sealed class EverestStyleConstructorTarget
+{
+    public int Value;
+    public int PostValue;
+    public static int CleanupCalls;
+
+    public EverestStyleConstructorTarget(bool initialize, int value)
+    {
+        try
+        {
+            if (initialize)
+            {
+                orig_ctor(value);
+                PostValue = 4;
+                return;
+            }
+            throw new InvalidOperationException("constructor branch failed");
+        }
+        finally
+        {
+            CleanupCalls++;
+        }
+    }
+
+    public void orig_ctor(int value) => Value = value;
+}
+
+public delegate void OrigEverestStyleConstructor(EverestStyleConstructorTarget target, bool initialize, int value);
+public delegate void HookEverestStyleConstructor(OrigEverestStyleConstructor orig,
+    EverestStyleConstructorTarget target, bool initialize, int value);
+
+public static class EverestStyleConstructorHooks
+{
+    public static int Calls;
+
+    public static void OnConstructor(OrigEverestStyleConstructor orig,
+        EverestStyleConstructorTarget target, bool initialize, int value)
+    {
+        Calls++;
+        orig(target, initialize, value);
+        target.PostValue++;
+    }
+}
+
+public sealed class DirectBranchConstructorTarget
+{
+    public int Value;
+    public int PostValue;
+
+    public DirectBranchConstructorTarget(bool initialize, int value)
+    {
+        if (initialize)
+        {
+            Value = value;
+            PostValue = 4;
+            return;
+        }
+        throw new InvalidOperationException("direct constructor branch failed");
+    }
+}
+
+public delegate void OrigDirectBranchConstructor(DirectBranchConstructorTarget target, bool initialize, int value);
+public delegate void HookDirectBranchConstructor(OrigDirectBranchConstructor orig,
+    DirectBranchConstructorTarget target, bool initialize, int value);
+
+public static class DirectBranchConstructorHooks
+{
+    public static int Calls;
+
+    public static void OnConstructor(OrigDirectBranchConstructor orig,
+        DirectBranchConstructorTarget target, bool initialize, int value)
+    {
+        Calls++;
+        orig(target, initialize, value);
+        target.PostValue++;
+    }
 }
 
 public sealed class GenericRefTarget<T>
