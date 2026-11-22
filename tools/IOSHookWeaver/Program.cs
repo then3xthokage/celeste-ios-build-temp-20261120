@@ -101,6 +101,7 @@ public static class IOSHookWeaver
         });
     }
 
+#if !__IOS__
     private static int Main(string[] args)
     {
         if (args.Length != 2)
@@ -129,6 +130,7 @@ public static class IOSHookWeaver
         }
         return 0;
     }
+#endif
 
     public static byte[] WeaveAssembly(byte[] input, out string assemblyName, out int woven, out string[] skippedMethods, string resolverDirectory = null)
     {
