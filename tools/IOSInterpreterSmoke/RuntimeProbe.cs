@@ -17,6 +17,7 @@ namespace IOSInterpreterSmoke;
 internal static class RuntimeProbe
 {
     public static Action<string> Progress { get; set; }
+    private static int moduleInitializerHookCalls;
 
     public static void Run()
     {
@@ -53,10 +54,7 @@ internal static class RuntimeProbe
         if (moduleInitializerToken == 0)
             throw new MissingMethodException("The woven fixture did not contain its module initializer.");
         MethodBase moduleInitializer = fixture.ManifestModule.ResolveMethod(moduleInitializerToken);
-        Type moduleHooksType = fixture.GetType("ProbeModuleInitializerHooks", throwOnError: true);
-        Delegate moduleHook = Delegate.CreateDelegate(
-            fixture.GetType("ProbeModuleInitializerHook", throwOnError: true),
-            moduleHooksType.GetMethod("OnInitialize", BindingFlags.Public | BindingFlags.Static));
+        Delegate moduleHook = CreateExternalModuleInitializerHook(fixture);
         IOSHookRuntime.AddOn(moduleInitializer, moduleHook);
 
         Mark("NLua generated callback and proxy probes");
@@ -67,7 +65,7 @@ internal static class RuntimeProbe
         if ((int)moduleState.GetField("Value").GetValue(null) != 73)
             throw new InvalidOperationException("The downloaded assembly's module initializer did not run before hook dispatch.");
         AssertEqual("Global module initializer On hook on iOS interpreter", 1,
-            moduleHooksType.GetField("Calls").GetValue(null));
+            moduleInitializerHookCalls);
 
         Mark("Everest-style constructor chain");
         VerifyEverestStyleConstructor(fixture);
@@ -252,6 +250,42 @@ internal static class RuntimeProbe
     }
 
     private static void Mark(string stage) => Progress?.Invoke(stage);
+
+    private static Delegate CreateExternalModuleInitializerHook(Assembly fixture)
+    {
+        Type originalDelegate = fixture.GetType("ProbeModuleInitializerOriginal", throwOnError: true);
+        AssemblyBuilder assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("CelesteIOS.ExternalModuleInitializerHook"), AssemblyBuilderAccess.Run);
+        ModuleBuilder module = assembly.DefineDynamicModule("hook");
+        TypeBuilder delegateBuilder = module.DefineType("ExternalModuleInitializerHook",
+            TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Class,
+            typeof(MulticastDelegate));
+        ConstructorBuilder constructor = delegateBuilder.DefineConstructor(
+            MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
+            CallingConventions.Standard, new[] { typeof(object), typeof(IntPtr) });
+        constructor.SetImplementationFlags(MethodImplAttributes.Runtime | MethodImplAttributes.Managed);
+        MethodBuilder invoke = delegateBuilder.DefineMethod("Invoke",
+            MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.NewSlot | MethodAttributes.Virtual,
+            CallingConventions.Standard, typeof(void), new[] { originalDelegate });
+        invoke.SetImplementationFlags(MethodImplAttributes.Runtime | MethodImplAttributes.Managed);
+        Type hookDelegate = delegateBuilder.CreateType();
+
+        TypeBuilder callbacks = module.DefineType("ExternalModuleInitializerCallbacks",
+            TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
+        MethodBuilder callback = callbacks.DefineMethod("OnInitialize",
+            MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
+            typeof(void), new[] { originalDelegate });
+        ILGenerator il = callback.GetILGenerator();
+        il.Emit(OpCodes.Call, typeof(RuntimeProbe).GetMethod(nameof(RecordModuleInitializerHook),
+            BindingFlags.Public | BindingFlags.Static));
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Callvirt, originalDelegate.GetMethod("Invoke"));
+        il.Emit(OpCodes.Ret);
+        MethodInfo callbackMethod = callbacks.CreateType().GetMethod("OnInitialize", BindingFlags.Public | BindingFlags.Static);
+        return Delegate.CreateDelegate(hookDelegate, callbackMethod);
+    }
+
+    public static void RecordModuleInitializerHook() => moduleInitializerHookCalls++;
 
     private static byte[] ApplyEverestStyleConstructorShape(byte[] source)
     {
