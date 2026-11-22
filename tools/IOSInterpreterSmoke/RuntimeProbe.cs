@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Mono.Cecil.Cil;
@@ -109,6 +110,86 @@ internal static class RuntimeProbe
         AssertEqual("Open generic ILContext sidecar on iOS interpreter", "patched-generic", genericClosed.Invoke(null, null)?.ToString());
         IOSILHookRuntime.Remove(genericDefinition, editGeneric);
         AssertEqual("Open generic IL hook removal on iOS interpreter", "original-generic", genericClosed.Invoke(null, null)?.ToString());
+
+        Type genericHooks = fixture.GetType("ProbeHooks", throwOnError: true);
+        object openUntypedHookIdentity = new object();
+        IOSHookRuntime.AddOnReflected(genericDefinition,
+            genericHooks.GetMethod("OnGenericConstant", BindingFlags.Public | BindingFlags.Static),
+            null, openUntypedHookIdentity, null);
+        AssertEqual("Open generic method reflected On hook on iOS interpreter",
+            "hooked-open-method", genericClosed.Invoke(null, null)?.ToString());
+        IOSHookRuntime.RemoveOnReflected(genericDefinition, openUntypedHookIdentity);
+        AssertEqual("Open generic method reflected On hook removal on iOS interpreter",
+            "original-generic", genericClosed.Invoke(null, null)?.ToString());
+        AssertEqual("Open generic method reflected On callback count", 1,
+            genericHooks.GetField("GenericUntypedMethodHookCalls").GetValue(null));
+
+        Type openHookedTypeDefinition = genericTypeDefinition;
+        MethodInfo openHookedTypeTarget = openHookedTypeDefinition.GetMethod("GenericTypeConstant");
+        Type openHookedType = openHookedTypeDefinition.MakeGenericType(typeof(int));
+        MethodInfo closedHookedTypeTarget = openHookedType.GetMethod("GenericTypeConstant");
+        MethodInfo openTypeHook = fixture.GetType("ProbeHooks", throwOnError: true)
+            .GetMethod("OnGenericType", BindingFlags.Public | BindingFlags.Static);
+        object openTypeHookIdentity = new object();
+        IOSHookRuntime.AddOnReflected(openHookedTypeTarget, openTypeHook, null, openTypeHookIdentity, null);
+        AssertEqual("Open generic type reflected On hook on iOS interpreter",
+            "hooked-open-type", closedHookedTypeTarget.Invoke(null, null)?.ToString());
+        IOSHookRuntime.RemoveOnReflected(openHookedTypeTarget, openTypeHookIdentity);
+        AssertEqual("Open generic type reflected On hook removal on iOS interpreter",
+            "original-open-type", closedHookedTypeTarget.Invoke(null, null)?.ToString());
+        AssertEqual("Open generic type reflected On callback count", 1,
+            fixture.GetType("ProbeHooks").GetField("GenericTypeHookCalls").GetValue(null));
+
+        Type genericEchoType = fixture.GetType("ProbeGenericMethodTarget", throwOnError: true);
+        MethodInfo openEchoTarget = genericEchoType.GetMethod("Echo", BindingFlags.Public | BindingFlags.Static)
+            .GetGenericMethodDefinition();
+        MethodInfo echoIntTarget = openEchoTarget.MakeGenericMethod(typeof(int));
+        Type probeHooks = genericHooks;
+        object openEchoHookIdentity = new object();
+        IOSHookRuntime.AddOnReflected(openEchoTarget,
+            probeHooks.GetMethod("OnGenericMethod", BindingFlags.Public | BindingFlags.Static),
+            null, openEchoHookIdentity, null);
+        object[] echoArguments = { 37 };
+        AssertEqual("Open generic method reflected On hook on iOS interpreter", 37,
+            echoIntTarget.Invoke(null, echoArguments));
+        IOSHookRuntime.RemoveOnReflected(openEchoTarget, openEchoHookIdentity);
+        AssertEqual("Open generic method reflected On hook removal on iOS interpreter", 41,
+            echoIntTarget.Invoke(null, new object[] { 41 }));
+        AssertEqual("Open generic method reflected On callback count", 1,
+            probeHooks.GetField("GenericMethodHookCalls").GetValue(null));
+
+        object openEchoDetourIdentity = new object();
+        IOSHookRuntime.AddDetour(openEchoTarget,
+            probeHooks.GetMethod("DetourGenericMethod", BindingFlags.Public | BindingFlags.Static),
+            openEchoDetourIdentity, null);
+        AssertEqual("Open generic method reflected detour on iOS interpreter", 53,
+            echoIntTarget.Invoke(null, new object[] { 53 }));
+        IOSHookRuntime.RemoveDetour(openEchoTarget, openEchoDetourIdentity);
+        AssertEqual("Open generic method detour removal on iOS interpreter", 59,
+            echoIntTarget.Invoke(null, new object[] { 59 }));
+        AssertEqual("Open generic method reflected detour callback count", 1,
+            probeHooks.GetField("GenericMethodDetourCalls").GetValue(null));
+
+        Type genericInstanceTargetDefinition = fixture.GetTypes().Single(type =>
+            type.IsGenericTypeDefinition &&
+            type.Name.StartsWith("ProbeGenericInstanceTarget", StringComparison.Ordinal));
+        Type genericInstanceTargetType = genericInstanceTargetDefinition.MakeGenericType(typeof(string));
+        object genericInstanceTarget = Activator.CreateInstance(genericInstanceTargetType);
+        MethodInfo openInstanceEchoTarget = genericInstanceTargetDefinition.GetMethod("Echo")
+            .GetGenericMethodDefinition();
+        MethodInfo openInstanceDetour = genericInstanceTargetDefinition.GetMethod("DetourEcho")
+            .GetGenericMethodDefinition();
+        MethodInfo closedInstanceEchoTarget = genericInstanceTargetType.GetMethod("Echo")
+            .MakeGenericMethod(typeof(int));
+        object openInstanceDetourIdentity = new object();
+        IOSHookRuntime.AddDetour(openInstanceEchoTarget, openInstanceDetour, openInstanceDetourIdentity, null);
+        AssertEqual("Open generic instance detour on iOS interpreter", 67,
+            closedInstanceEchoTarget.Invoke(genericInstanceTarget, new object[] { 67 }));
+        AssertEqual("Open generic instance detour callback count", 1,
+            genericInstanceTargetType.GetField("DetourCalls").GetValue(genericInstanceTarget));
+        IOSHookRuntime.RemoveDetour(openInstanceEchoTarget, openInstanceDetourIdentity);
+        AssertEqual("Open generic instance detour removal on iOS interpreter", 71,
+            closedInstanceEchoTarget.Invoke(genericInstanceTarget, new object[] { 71 }));
     }
 
     private static void VerifyCecilGeneratedMethod()

@@ -165,11 +165,17 @@ public class GenericChainedConstructor<T> : BranchCtorBase
 public sealed class GenericRefTarget<T>
 {
     private T value;
+    public int DetourCalls;
 
     public GenericRefTarget(T initial) => value = initial;
     public ref T GetRef() => ref value;
     public T ReadRef() => GetRef();
     public ref U Echo<U>(ref U input) => ref input;
+    public ref U DetourEcho<U>(ref U input)
+    {
+        DetourCalls++;
+        return ref input;
+    }
     public int ExerciseEcho()
     {
         int input = 23;

@@ -25,6 +25,7 @@ public static class CrossHooks
     public static int GenericTypeCalls;
     public static int GenericMethodCalls;
     public static int GenericCombinedCalls;
+    public static int GenericDetourCalls;
     public static int InCalls;
     public static int ReadOnlyCalls;
 
@@ -53,6 +54,12 @@ public static class CrossHooks
     {
         GenericMethodCalls++;
         return ref orig(ref input);
+    }
+
+    public static ref T DetourGenericMethod<T>(ref T input)
+    {
+        GenericDetourCalls++;
+        return ref input;
     }
 
     public static ref TValue OnGenericCombined<TTarget, TValue>(GenericCombinedOrig<TTarget, TValue> orig,

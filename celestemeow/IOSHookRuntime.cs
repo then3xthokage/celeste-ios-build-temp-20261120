@@ -95,6 +95,7 @@ namespace celestemeow
             public MethodInfo HookMethod;
             public object HookTarget;
             public object Identity;
+            public bool IsDetour;
             public bool UseOriginalInstance;
             public long Sequence;
             public string Id;
@@ -145,7 +146,9 @@ namespace celestemeow
                     return InvokeOriginal(instance, arguments);
 
                 Registration registration = hooks[index];
-                ParameterInfo[] hookParameters = registration.HookMethod.GetParameters();
+                MethodInfo hookMethod = CloseHookMethodForTarget(registration.HookMethod, target,
+                    registration.IsDetour, registration.UseOriginalInstance);
+                ParameterInfo[] hookParameters = hookMethod.GetParameters();
                 bool instanceBound = registration.UseOriginalInstance && !registration.HookMethod.IsStatic;
                 int targetArgumentCount = target.GetParameters().Length + (target.IsStatic || instanceBound ? 0 : 1);
                 bool hasOrig = hookParameters.Length == targetArgumentCount + 1 &&
@@ -168,7 +171,7 @@ namespace celestemeow
                 {
                     result = registration.Hook != null
                         ? registration.Hook.DynamicInvoke(hookArguments)
-                        : registration.HookMethod.Invoke(instanceBound ? instance : registration.HookTarget, hookArguments);
+                        : hookMethod.Invoke(instanceBound ? instance : registration.HookTarget, hookArguments);
                 }
                 catch (TargetInvocationException exception) when (exception.InnerException != null)
                 {
@@ -361,7 +364,7 @@ namespace celestemeow
             if (target == null) throw new ArgumentNullException(nameof(target));
             if (hook == null) throw new ArgumentNullException(nameof(hook));
             if (target.ContainsGenericParameters)
-                throw new NotSupportedException("An On hook must target a closed generic method or type on iOS: " + target);
+                throw new NotSupportedException("A delegate-based On hook needs a closed target; use a reflected generic hook method for " + target + ".");
             ValidateHookSignature(target, hook.Method);
 
             lock (Sync)
@@ -388,7 +391,7 @@ namespace celestemeow
                 if (next.Length == 0) OnHooks.Remove(target);
                 else OnHooks[target] = next;
                 TypedDispatchCache.Remove(target);
-                SetGateEnabled(target, next.Length > 0 || ModifiedBodies.ContainsKey(target));
+                SetGateEnabled(target, HasGateSource(target));
             }
         }
 
@@ -397,11 +400,9 @@ namespace celestemeow
             if (target == null) throw new ArgumentNullException(nameof(target));
             if (hookMethod == null) throw new ArgumentNullException(nameof(hookMethod));
             if (identity == null) throw new ArgumentNullException(nameof(identity));
-            if (target.ContainsGenericParameters)
-                throw new NotSupportedException("A reflected On hook must target a closed generic method or type on iOS: " + target);
             if (!hookMethod.IsStatic && hookTarget == null)
                 throw new InvalidOperationException("An instance hook method requires a hook target.");
-            ValidateHookSignature(target, hookMethod);
+            CloseHookMethodForTarget(hookMethod, target, false, false);
 
             lock (Sync)
             {
@@ -411,7 +412,7 @@ namespace celestemeow
                 Registration registration = ReadRegistration(hookMethod, hookTarget, identity, config);
                 Registration[] next = chain.Concat(new[] { registration }).ToArray();
                 OnHooks[target] = OrderByConfiguration(next);
-                TypedDispatchCache.Remove(target);
+                InvalidateTypedDispatchForTarget(target);
                 SetGateEnabled(target, true);
             }
         }
@@ -426,8 +427,8 @@ namespace celestemeow
                 Registration[] next = chain.Where(item => !ReferenceEquals(item.Identity, identity)).ToArray();
                 if (next.Length == 0) OnHooks.Remove(target);
                 else OnHooks[target] = next;
-                TypedDispatchCache.Remove(target);
-                SetGateEnabled(target, next.Length > 0 || ModifiedBodies.ContainsKey(target));
+                InvalidateTypedDispatchForTarget(target);
+                SetGateEnabled(target, HasGateSource(target));
             }
         }
 
@@ -436,20 +437,19 @@ namespace celestemeow
             if (target == null) throw new ArgumentNullException(nameof(target));
             if (replacement == null) throw new ArgumentNullException(nameof(replacement));
             if (identity == null) throw new ArgumentNullException(nameof(identity));
-            if (target.ContainsGenericParameters)
-                throw new NotSupportedException("A detour must target a closed generic method or type on iOS: " + target);
 
             bool bindsOriginalInstance = !replacement.IsStatic && !target.IsStatic;
-            ValidateDetourSignature(target, replacement, bindsOriginalInstance);
+            CloseHookMethodForTarget(replacement, target, true, bindsOriginalInstance);
             lock (Sync)
             {
                 Registration[] chain;
                 if (!OnHooks.TryGetValue(target, out chain)) chain = Array.Empty<Registration>();
                 if (chain.Any(item => ReferenceEquals(item.Identity, identity))) return;
                 Registration registration = ReadRegistration(replacement, null, identity, config);
+                registration.IsDetour = true;
                 registration.UseOriginalInstance = bindsOriginalInstance;
                 OnHooks[target] = OrderByConfiguration(chain.Concat(new[] { registration }).ToArray());
-                TypedDispatchCache.Remove(target);
+                InvalidateTypedDispatchForTarget(target);
                 SetGateEnabled(target, true);
             }
         }
@@ -464,11 +464,10 @@ namespace celestemeow
             if (target == null || identity == null) return -1;
             lock (Sync)
             {
-                Registration[] chain;
-                if (!OnHooks.TryGetValue(target, out chain)) return -1;
+                Registration[] chain = GetRegistrationsForTargetLocked(target);
                 for (int i = 0; i < chain.Length; i++)
                     if (ReferenceEquals(chain[i].Identity, identity)) return i;
-                return chain.Length;
+                return chain.Length == 0 ? -1 : chain.Length;
             }
         }
 
@@ -476,10 +475,7 @@ namespace celestemeow
         {
             if (target == null) return 0;
             lock (Sync)
-            {
-                Registration[] chain;
-                return OnHooks.TryGetValue(target, out chain) ? chain.Length : 0;
-            }
+                return GetRegistrationsForTargetLocked(target).Length;
         }
 
         public static Delegate CreateDetourTrampoline(MethodBase target, object identity, Type delegateType)
@@ -491,7 +487,7 @@ namespace celestemeow
             int index;
             lock (Sync)
             {
-                if (!OnHooks.TryGetValue(target, out chain)) chain = Array.Empty<Registration>();
+                chain = GetRegistrationsForTargetLocked(target);
                 index = Array.FindIndex(chain, item => ReferenceEquals(item.Identity, identity));
             }
             string typedDelegateName = "CelesteIOS.Generated.__ios_typed_delegate_" + IOSHookIdentity.ForMethod(target);
@@ -501,6 +497,8 @@ namespace celestemeow
                 Type expectedDelegate = GetTypedDelegateType(target);
                 if (!HaveSameTypedSignature(expectedDelegate, delegateType))
                     throw new InvalidOperationException("The typed detour trampoline delegate does not match " + target + ".");
+                lock (Sync) chain = GetRegistrationsForTargetLocked(target);
+                index = Array.FindIndex(chain, item => ReferenceEquals(item.Identity, identity));
                 Delegate continuation = CreateTypedPipelineContinuation(target, expectedDelegate, chain, Math.Max(index + 1, 0));
                 return AdaptTypedDelegate(continuation, delegateType);
             }
@@ -513,10 +511,11 @@ namespace celestemeow
         {
             lock (Sync)
             {
-                foreach (MethodBase target in OnHooks.Keys.ToArray())
-                    SetGateEnabled(target, ModifiedBodies.ContainsKey(target));
+                MethodBase[] targets = OnHooks.Keys.ToArray();
                 OnHooks.Clear();
                 TypedDispatchCache.Clear();
+                foreach (MethodBase target in targets)
+                    SetGateEnabled(target, HasGateSource(target));
             }
             IOSILHookRuntime.Clear();
         }
@@ -542,9 +541,7 @@ namespace celestemeow
                     }
                     catch { }
                 }
-                Registration[] hooks;
-                bool hasOnHooks = OnHooks.TryGetValue(target, out hooks) && hooks.Length > 0;
-                SetGateEnabled(target, hasOnHooks || body != null);
+                SetGateEnabled(target, HasGateSource(target));
             }
         }
 
@@ -613,6 +610,66 @@ namespace celestemeow
                 return;
             }
             field.SetValue(null, enabled);
+        }
+
+        private static Registration[] GetRegistrationsForTargetLocked(MethodBase target)
+        {
+            List<Registration> result = new List<Registration>();
+            AddRegistrationsForKey(target, result);
+
+            MethodBase sameDeclaringTypeDefinition = IOSHookIdentity.GetMethodDefinitionPreservingDeclaringType(target);
+            if (!sameDeclaringTypeDefinition.Equals(target))
+                AddRegistrationsForKey(sameDeclaringTypeDefinition, result);
+
+            MethodBase openGenericDefinition = IOSHookIdentity.GetDefinition(target);
+            if (!openGenericDefinition.Equals(target) && !openGenericDefinition.Equals(sameDeclaringTypeDefinition))
+                AddRegistrationsForKey(openGenericDefinition, result);
+
+            return OrderByConfiguration(result.ToArray());
+        }
+
+        private static void AddRegistrationsForKey(MethodBase key, List<Registration> result)
+        {
+            Registration[] registrations;
+            if (!OnHooks.TryGetValue(key, out registrations)) return;
+            foreach (Registration registration in registrations)
+                if (!result.Any(existing => ReferenceEquals(existing.Identity, registration.Identity)))
+                    result.Add(registration);
+        }
+
+        private static void InvalidateTypedDispatchForTarget(MethodBase target)
+        {
+            MethodBase openGenericDefinition = IOSHookIdentity.GetDefinition(target);
+            foreach (MethodBase cachedTarget in TypedDispatchCache.Keys.ToArray())
+            {
+                if (cachedTarget.Equals(target) ||
+                    IOSHookIdentity.GetMethodDefinitionPreservingDeclaringType(cachedTarget).Equals(target) ||
+                    IOSHookIdentity.GetDefinition(cachedTarget).Equals(target) ||
+                    IOSHookIdentity.GetDefinition(cachedTarget).Equals(openGenericDefinition))
+                    TypedDispatchCache.Remove(cachedTarget);
+            }
+        }
+
+        private static bool HasGateSource(MethodBase target)
+        {
+            foreach (KeyValuePair<MethodBase, Registration[]> entry in OnHooks)
+                if (entry.Value.Length > 0 && SameGateFamily(entry.Key, target))
+                    return true;
+            foreach (MethodBase modifiedTarget in ModifiedBodies.Keys)
+                if (SameGateFamily(modifiedTarget, target))
+                    return true;
+            return false;
+        }
+
+        private static bool SameGateFamily(MethodBase left, MethodBase right)
+        {
+            if (!string.Equals(IOSHookIdentity.ForMethod(left), IOSHookIdentity.ForMethod(right), StringComparison.Ordinal))
+                return false;
+            Type leftType = left.DeclaringType;
+            Type rightType = right.DeclaringType;
+            if (leftType.ContainsGenericParameters || rightType.ContainsGenericParameters)
+                return leftType.ContainsGenericParameters && rightType.ContainsGenericParameters && leftType.Equals(rightType);
+            return leftType.Equals(rightType);
         }
 
         private static Registration ReadRegistration(MethodInfo method, object hookTarget, object identity, object config)
@@ -725,9 +782,7 @@ namespace celestemeow
             }
 
             Registration[] registrations;
-            lock (Sync)
-                if (!OnHooks.TryGetValue(target, out registrations))
-                    registrations = Array.Empty<Registration>();
+            lock (Sync) registrations = GetRegistrationsForTargetLocked(target);
 
             MethodInfo original = OriginalMethods.GetOrAdd(target, FindOriginalMethod);
             Invocation invocation = new Invocation(target, original, registrations, instance);
@@ -758,8 +813,7 @@ namespace celestemeow
                 if (expectedType == null || expectedType != delegateType)
                     throw new InvalidOperationException("The typed iOS hook gate did not provide its generated signature delegate for " + target + ".");
 
-                Registration[] registrations;
-                if (!OnHooks.TryGetValue(target, out registrations)) registrations = Array.Empty<Registration>();
+                Registration[] registrations = GetRegistrationsForTargetLocked(target);
                 Delegate result = CreateTypedPipeline(target, delegateType, registrations);
                 if (byType == null)
                 {
@@ -810,6 +864,8 @@ namespace celestemeow
             for (int index = registrations.Length - 1; index >= firstIndex; index--)
             {
                 Registration registration = registrations[index];
+                MethodInfo hookMethod = CloseHookMethodForTarget(registration.HookMethod, target,
+                    registration.IsDetour, registration.UseOriginalInstance);
                 Delegate hook = registration.Hook;
                 if (hook == null)
                     hook = CreateTypedMethodDelegate(registration, target);
@@ -1073,16 +1129,18 @@ namespace celestemeow
 
         private static Delegate CreateTypedMethodDelegate(Registration registration, MethodBase target)
         {
-            if (registration.UseOriginalInstance && !registration.HookMethod.IsStatic)
-                return CreateTypedInstanceDetour(registration, target);
+            MethodInfo hookMethod = CloseHookMethodForTarget(registration.HookMethod, target,
+                registration.IsDetour, registration.UseOriginalInstance);
+            if (registration.UseOriginalInstance && !hookMethod.IsStatic)
+                return CreateTypedInstanceDetour(registration, target, hookMethod);
 
-            Type delegateType = CreateDelegateTypeForMethod(registration.HookMethod);
-            return registration.HookMethod.IsStatic
-                ? Delegate.CreateDelegate(delegateType, (MethodInfo)registration.HookMethod, true)
-                : Delegate.CreateDelegate(delegateType, registration.HookTarget, (MethodInfo)registration.HookMethod, true);
+            Type delegateType = CreateDelegateTypeForMethod(hookMethod);
+            return hookMethod.IsStatic
+                ? Delegate.CreateDelegate(delegateType, hookMethod, true)
+                : Delegate.CreateDelegate(delegateType, registration.HookTarget, hookMethod, true);
         }
 
-        private static Delegate CreateTypedInstanceDetour(Registration registration, MethodBase target)
+        private static Delegate CreateTypedInstanceDetour(Registration registration, MethodBase target, MethodInfo hookMethod)
         {
             Type delegateType = GetTypedDelegateType(target);
             MethodInfo delegateInvoke = delegateType.GetMethod("Invoke");
@@ -1094,24 +1152,24 @@ namespace celestemeow
             if (instanceParameter.IsByRef)
             {
                 Type instanceType = instanceParameter.GetElementType();
-                if (instanceType == registration.HookMethod.DeclaringType &&
+                if (instanceType == hookMethod.DeclaringType &&
                     (instanceType.IsValueType || instanceType.IsByRefLike))
                 {
                     // A boxed struct would lose the caller's mutable this. An
                     // open instance delegate instead receives the original
                     // by-reference this pointer and invokes the replacement
                     // with the exact typed signature generated for the target.
-                    return Delegate.CreateDelegate(delegateType, null, registration.HookMethod, true);
+                    return Delegate.CreateDelegate(delegateType, null, hookMethod, true);
                 }
                 throw new NotSupportedException("A typed value-type detour must be an instance method on the target value type: " + target + ".");
             }
             if (instanceParameter.IsValueType || instanceParameter.IsByRefLike)
                 throw new NotSupportedException("Typed instance detours require an explicit by-reference target instance: " + target + ".");
 
-            Type replacementDelegateType = CreateDelegateTypeForMethod(registration.HookMethod);
+            Type replacementDelegateType = CreateDelegateTypeForMethod(hookMethod);
             IOSTypedDetourInvocationState state = new IOSTypedDetourInvocationState
             {
-                Method = registration.HookMethod,
+                Method = hookMethod,
                 DelegateType = replacementDelegateType
             };
 
@@ -1282,6 +1340,129 @@ namespace celestemeow
             return original;
         }
 
+        private static MethodInfo CloseHookMethodForTarget(MethodInfo hookMethod, MethodBase target,
+            bool isDetour, bool bindsOriginalInstance)
+        {
+            if (hookMethod == null) throw new ArgumentNullException(nameof(hookMethod));
+            if (target == null) throw new ArgumentNullException(nameof(target));
+
+            Exception lastFailure = null;
+            foreach (MethodInfo declaringTypeMethod in GetHookDeclaringTypeVariants(hookMethod, target))
+            {
+                Type[][] candidates = GetTargetGenericArgumentCandidates(target);
+                if (!declaringTypeMethod.IsGenericMethodDefinition)
+                {
+                    try
+                    {
+                        ValidateHookOrDetour(target, declaringTypeMethod, isDetour, bindsOriginalInstance);
+                        return declaringTypeMethod;
+                    }
+                    catch (Exception exception) when (IsSignatureBindingFailure(exception))
+                    {
+                        lastFailure = exception;
+                    }
+                    continue;
+                }
+
+                foreach (Type[] arguments in candidates)
+                {
+                    if (arguments.Length != declaringTypeMethod.GetGenericArguments().Length) continue;
+                    try
+                    {
+                        MethodInfo closed = declaringTypeMethod.MakeGenericMethod(arguments);
+                        ValidateHookOrDetour(target, closed, isDetour, bindsOriginalInstance);
+                        return closed;
+                    }
+                    catch (Exception exception) when (IsSignatureBindingFailure(exception))
+                    {
+                        lastFailure = exception;
+                    }
+                }
+            }
+
+            throw new NotSupportedException(
+                "The reflected hook or detour signature cannot be mapped to the generic target " + target + ".",
+                lastFailure);
+        }
+
+        private static IEnumerable<MethodInfo> GetHookDeclaringTypeVariants(MethodInfo hookMethod, MethodBase target)
+        {
+            Type declaringType = hookMethod.DeclaringType;
+            if (declaringType == null || !declaringType.ContainsGenericParameters)
+            {
+                yield return hookMethod;
+                yield break;
+            }
+            if (!declaringType.IsGenericType)
+                throw new NotSupportedException("The hook method's generic declaring type cannot be closed: " + hookMethod + ".");
+
+            Type definition = declaringType.GetGenericTypeDefinition();
+            Type[] targetDeclaringArguments = target.DeclaringType != null && target.DeclaringType.IsGenericType
+                ? target.DeclaringType.GetGenericArguments()
+                : Type.EmptyTypes;
+            Type[][] candidates = new[] { targetDeclaringArguments }
+                .Concat(GetTargetGenericArgumentCandidates(target))
+                .ToArray();
+            foreach (Type[] arguments in candidates)
+            {
+                if (arguments.Length != definition.GetGenericArguments().Length) continue;
+                Type closedType;
+                try { closedType = definition.MakeGenericType(arguments); }
+                catch (ArgumentException) { continue; }
+
+                MethodInfo closedMethod = closedType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic |
+                        BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                    .FirstOrDefault(candidate => candidate.Module == hookMethod.Module &&
+                        candidate.MetadataToken == hookMethod.MetadataToken);
+                if (closedMethod == null) continue;
+
+                if (hookMethod.IsGenericMethod && !hookMethod.IsGenericMethodDefinition &&
+                    closedMethod.IsGenericMethodDefinition)
+                {
+                    try { closedMethod = closedMethod.MakeGenericMethod(hookMethod.GetGenericArguments()); }
+                    catch (ArgumentException) { continue; }
+                }
+                yield return closedMethod;
+            }
+        }
+
+        private static Type[][] GetTargetGenericArgumentCandidates(MethodBase target)
+        {
+            Type[] declaringArguments = target.DeclaringType != null && target.DeclaringType.IsGenericType
+                ? target.DeclaringType.GetGenericArguments()
+                : Type.EmptyTypes;
+            Type[] methodArguments = target is MethodInfo method && method.IsGenericMethod
+                ? method.GetGenericArguments()
+                : Type.EmptyTypes;
+            List<Type[]> candidates = new List<Type[]>();
+            AddCandidate(declaringArguments.Concat(methodArguments).ToArray());
+            AddCandidate(methodArguments);
+            AddCandidate(declaringArguments);
+            AddCandidate(Type.EmptyTypes);
+            return candidates.ToArray();
+
+            void AddCandidate(Type[] candidate)
+            {
+                if (!candidates.Any(existing => existing.SequenceEqual(candidate)))
+                    candidates.Add(candidate);
+            }
+        }
+
+        private static void ValidateHookOrDetour(MethodBase target, MethodInfo method,
+            bool isDetour, bool bindsOriginalInstance)
+        {
+            if (isDetour)
+                ValidateDetourSignature(target, method, bindsOriginalInstance);
+            else
+                ValidateHookSignature(target, method);
+        }
+
+        private static bool IsSignatureBindingFailure(Exception exception)
+        {
+            return exception is ArgumentException || exception is InvalidOperationException ||
+                exception is NotSupportedException || exception is TypeLoadException;
+        }
+
         private static void ValidateHookSignature(MethodBase target, MethodInfo hookMethod)
         {
             ParameterInfo[] targetParameters = target.GetParameters();
@@ -1298,8 +1479,22 @@ namespace celestemeow
                 MethodInfo invoke = hookParameters[0].ParameterType.GetMethod("Invoke");
                 if (invoke == null || invoke.ReturnType != ((target as MethodInfo)?.ReturnType ?? typeof(void)))
                     throw new InvalidOperationException("The orig delegate return type does not match " + target + ".");
-                if (invoke.GetParameters().Length != targetArgumentCount)
+                ParameterInfo[] originalParameters = invoke.GetParameters();
+                if (originalParameters.Length != targetArgumentCount)
                     throw new InvalidOperationException("The orig delegate parameter count does not match " + target + ".");
+                int originalOffset = 0;
+                if (!target.IsStatic)
+                {
+                    Type instanceType = target.DeclaringType.IsValueType
+                        ? target.DeclaringType.MakeByRefType()
+                        : target.DeclaringType;
+                    if (originalParameters[0].ParameterType != instanceType)
+                        throw new InvalidOperationException("The orig delegate instance parameter does not match " + target + ".");
+                    originalOffset = 1;
+                }
+                for (int i = 0; i < targetParameters.Length; i++)
+                    if (originalParameters[i + originalOffset].ParameterType != targetParameters[i].ParameterType)
+                        throw new InvalidOperationException("The orig delegate parameter " + i + " does not match " + target + ".");
             }
 
             Type targetReturn = (target as MethodInfo)?.ReturnType ?? typeof(void);
@@ -1313,6 +1508,9 @@ namespace celestemeow
                 throw new NotSupportedException("Constructor detours require an explicit iOS constructor gate: " + target);
             if (target.IsStatic && !replacement.IsStatic)
                 throw new InvalidOperationException("A static method cannot be used as the instance target of a detour on " + target + ".");
+            if (bindsOriginalInstance && !replacement.IsStatic &&
+                !replacement.DeclaringType.IsAssignableFrom(target.DeclaringType))
+                throw new InvalidOperationException("The instance detour method is not declared on a type compatible with " + target + ".");
             ParameterInfo[] targetParameters = target.GetParameters();
             ParameterInfo[] replacementParameters = replacement.GetParameters();
             if (replacementParameters.Length != targetParameters.Length +

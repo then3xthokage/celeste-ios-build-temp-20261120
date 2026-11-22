@@ -152,6 +152,54 @@ internal static class Program
         IOSHookRuntime.AddOn(genericTargetType.GetMethod("Echo").MakeGenericMethod(typeof(int)),
             Delegate.CreateDelegate(genericCombinedDelegate, genericCombinedHook, true));
 
+        Type genericTargetDefinition = genericTargetType.GetGenericTypeDefinition();
+        MethodInfo openGenericTypeTarget = genericTargetDefinition.GetMethod("GetRef");
+        object openGenericTypeHookIdentity = new object();
+        IOSHookRuntime.AddOnReflected(openGenericTypeTarget, crossHooksType.GetMethod("OnGenericType"),
+            null, openGenericTypeHookIdentity, null);
+        Type stringGenericTargetType = genericTargetDefinition.MakeGenericType(typeof(string));
+        object stringGenericTarget = Activator.CreateInstance(stringGenericTargetType, new object[] { "open-type" });
+        AssertEqual("open generic type reflected hook", "open-type",
+            stringGenericTargetType.GetMethod("GetRef").Invoke(stringGenericTarget, null).ToString());
+        IOSHookRuntime.RemoveOnReflected(openGenericTypeTarget, openGenericTypeHookIdentity);
+
+        MethodInfo openGenericCombinedTarget = genericTargetDefinition.GetMethod("Echo").GetGenericMethodDefinition();
+        object openGenericCombinedIdentity = new object();
+        IOSHookRuntime.AddOnReflected(openGenericCombinedTarget,
+            crossHooksType.GetMethod("OnGenericCombined"), null, openGenericCombinedIdentity, null);
+        MethodInfo stringIntCombinedTarget = stringGenericTargetType.GetMethod("Echo").MakeGenericMethod(typeof(int));
+        AssertEqual("open generic declaring type and method reflected hook", "29",
+            stringIntCombinedTarget.Invoke(stringGenericTarget, new object[] { 29 }).ToString());
+        IOSHookRuntime.RemoveOnReflected(openGenericCombinedTarget, openGenericCombinedIdentity);
+
+        object openGenericInstanceDetourIdentity = new object();
+        IOSHookRuntime.AddDetour(openGenericCombinedTarget,
+            genericTargetDefinition.GetMethod("DetourEcho"), openGenericInstanceDetourIdentity, null);
+        AssertEqual("open generic instance detour", "31",
+            stringIntCombinedTarget.Invoke(stringGenericTarget, new object[] { 31 }).ToString());
+        AssertEqual("open generic instance detour callback count", "1",
+            stringGenericTargetType.GetField("DetourCalls").GetValue(stringGenericTarget).ToString());
+        IOSHookRuntime.RemoveDetour(openGenericCombinedTarget, openGenericInstanceDetourIdentity);
+
+        MethodInfo openGenericMethodTarget = genericMethodType.GetMethod("Echo").GetGenericMethodDefinition();
+        MethodInfo genericMethodHookDefinition = crossHooksType.GetMethod("OnGenericMethod");
+        object openGenericMethodHookIdentity = new object();
+        IOSHookRuntime.AddOnReflected(openGenericMethodTarget, genericMethodHookDefinition,
+            null, openGenericMethodHookIdentity, null);
+        MethodInfo stringGenericMethodTarget = openGenericMethodTarget.MakeGenericMethod(typeof(string));
+        AssertEqual("open generic method reflected hook", "open-method",
+            stringGenericMethodTarget.Invoke(null, new object[] { "open-method" }).ToString());
+        IOSHookRuntime.RemoveOnReflected(openGenericMethodTarget, openGenericMethodHookIdentity);
+
+        MethodInfo genericDetourDefinition = crossHooksType.GetMethod("DetourGenericMethod");
+        object openGenericDetourIdentity = new object();
+        IOSHookRuntime.AddDetour(openGenericMethodTarget, genericDetourDefinition, openGenericDetourIdentity, null);
+        AssertEqual("open generic method reflected detour", "open-detour",
+            stringGenericMethodTarget.Invoke(null, new object[] { "open-detour" }).ToString());
+        IOSHookRuntime.RemoveDetour(openGenericMethodTarget, openGenericDetourIdentity);
+        AssertEqual("open generic method detour callback count", "1",
+            ReadStatic<int>(crossHooksType, "GenericDetourCalls").ToString());
+
         MethodInfo refTarget = targetType.GetMethod("GetRef");
         Type origDelegateType = targetAssembly.GetType("OrigGetRef", true);
         Delegate typedOriginal = IOSHookRuntime.CreateOriginalDelegate(refTarget, origDelegateType);
@@ -258,7 +306,7 @@ internal static class Program
         AssertEqual("branchy class constructor hook", "13/123", $"{branchBaseValue}/{branchValue}");
         AssertEqual("generic chained class constructor hook", "29/1", $"{genericChainedBaseValue}/{genericChainedValue}");
         AssertEqual("generic targets", "31/17/23", $"{genericTypeRef}/{genericMethodRef}/{genericCombinedRef}");
-        AssertEqual("generic callbacks", "1/1/1", $"{genericTypeCalls}/{genericMethodCalls}/{genericCombinedCalls}");
+        AssertEqual("generic callbacks", "2/2/2", $"{genericTypeCalls}/{genericMethodCalls}/{genericCombinedCalls}");
         AssertEqual("generic IL hooks", "patched-type/patched-instance/patched-method",
             $"{genericILTypeMethod.Invoke(null, null)}/{genericILInstanceMethod.Invoke(genericILInstance, null)}/{genericILMethod.Invoke(null, null)}");
         AssertEqual("open generic method on a closed generic type", "patched-generic-instance",
@@ -280,7 +328,7 @@ internal static class Program
         AssertEqual("rewritten Windows HLS import remains hookable", "007F7F86/1", $"{colorHookValue:X8}/{colorHookCalls}");
         AssertEqual("Everest legacy On removal", "007F7F7F", colorAfterRemoval.ToString("X8"));
 
-        Console.WriteLine("Typed hook smoke passed: woven=" + wovenCount + "; patched Everest On/IL integration and removal; open generic IL methods and declaring types; native decoder imports; hookable Windows HLS import shim; app-bundle and in-memory mod dependency resolution; ref-return, exact ref-readonly modifiers, in/ref, Span, pointer and function-pointer signatures; value-type instance detours and constructors; branchy and generic constructor chains; static constructors; generic type/method combinations; reflected callbacks; and cross-load-context dispatch.");
+        Console.WriteLine("Typed hook smoke passed: woven=" + wovenCount + "; patched Everest On/IL integration and removal; open generic IL, reflected On hooks, and detours across generic methods and declaring types; native decoder imports; hookable Windows HLS import shim; app-bundle and in-memory mod dependency resolution; ref-return, exact ref-readonly modifiers, in/ref, Span, pointer and function-pointer signatures; value-type instance detours and constructors; branchy and generic constructor chains; static constructors; generic type/method combinations; reflected callbacks; and cross-load-context dispatch.");
         return 0;
     }
 
