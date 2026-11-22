@@ -1,0 +1,15 @@
+diff --git a/src/MonoMod.Utils/DMDGenerators/DMDCecilGenerator.cs b/src/MonoMod.Utils/DMDGenerators/DMDCecilGenerator.cs
+index 2223d163..09c38914 100644
+--- a/src/MonoMod.Utils/DMDGenerators/DMDCecilGenerator.cs
++++ b/src/MonoMod.Utils/DMDGenerators/DMDCecilGenerator.cs
+@@ -58,7 +58,9 @@ namespace MonoMod.Utils
+                         Mono.Cecil.TypeAttributes.Public | Mono.Cecil.TypeAttributes.Abstract | Mono.Cecil.TypeAttributes.Sealed | Mono.Cecil.TypeAttributes.Class
+                     )
+                     {
+-                        BaseType = module.TypeSystem.Object
++                        // Dynamic DMD assemblies run on the current CLR, whose core library may
++                        // be System.Private.CoreLib rather than Cecil's default mscorlib facade.
++                        BaseType = module.ImportReference(typeof(object))
+                     };
+ 
+                     module.Types.Add(typeDef);
