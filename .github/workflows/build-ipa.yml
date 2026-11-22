@@ -215,7 +215,7 @@ jobs:
         run: |
           set -euo pipefail
           smoke_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/IOSInterpreterSmoke.csproj"
-          dotnet publish "$smoke_project" --configuration Release -r iossimulator-arm64 -p:EnableCodeSigning=false
+          dotnet build "$smoke_project" --configuration Release -r iossimulator-arm64 -p:EnableCodeSigning=false
           app_path="$(find "$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/bin/Release/net8.0-ios" -maxdepth 3 -type d -name 'IOSInterpreterSmoke.app' -print -quit)"
           if [ -z "$app_path" ]; then
             echo 'The iOS interpreter smoke app bundle was not produced.' >&2
