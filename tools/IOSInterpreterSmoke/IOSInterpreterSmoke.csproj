@@ -6,7 +6,8 @@
     <ApplicationTitle>iOS Hook Runtime Smoke</ApplicationTitle>
     <ApplicationId>gay.rooot.celestemeow.smoke</ApplicationId>
     <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
-    <EnableCodeSigning>false</EnableCodeSigning>
+    <EnableCodeSigning>true</EnableCodeSigning>
+    <CodesignKey>-</CodesignKey>
     <UseMonoRuntime>false</UseMonoRuntime>
     <DynamicCodeSupport>true</DynamicCodeSupport>
     <MtouchLink>None</MtouchLink>
