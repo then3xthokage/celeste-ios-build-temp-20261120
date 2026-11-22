@@ -182,9 +182,16 @@ jobs:
           key: celeste-dotnet-${{ runner.os }}-${{ steps.input-paths.outputs.game_hash }}-${{ hashFiles('celestemeow/*.csproj', 'celestemeow.sln', 'global.json', 'celestemeow/IOSHook*.cs', 'celestemeow/IOSILHookRuntime.cs', 'tools/IOSHookWeaver/*.cs', 'tools/IOSHookWeaver.SmokeTests/**/*.cs', 'tools/IOSHookWeaver.SmokeTests/**/*.csproj', 'tools/IOSInterpreterSmoke/**/*.cs', 'tools/IOSInterpreterSmoke/**/*.csproj', 'tools/IOSNativeImportPatcher/*.cs', 'patches/Everest-ios.patch') }}-ilspy-8.0.0.7246-preview3
 
       - name: Install .NET iOS workload when needed
+        working-directory: ${{ runner.temp }}
         shell: bash
         run: |
           set -euo pipefail
+          sdk9_version="$(dotnet --list-sdks | awk '$1 ~ /^9\./ { version=$1 } END { print version }')"
+          if [ -z "$sdk9_version" ]; then
+            echo 'The .NET 9 SDK required by the iOS hook smoke dependencies is missing.' >&2
+            exit 1
+          fi
+          printf '{"sdk":{"version":"%s","rollForward":"latestPatch"}}\n' "$sdk9_version" > "$RUNNER_TEMP/global.json"
           dotnet_path="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$(command -v dotnet)")"
           dotnet_root="$(dirname "$dotnet_path")"
           echo "DOTNET_ROOT=$dotnet_root" >> "$GITHUB_ENV"
