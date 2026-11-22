@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Mono.Cecil;
+using Mono.Cecil.Cil;
 
 internal static class Program
 {
@@ -12,24 +13,6 @@ internal static class Program
         ["FNA3D"] = "__Internal",
         ["FAudio"] = "__Internal",
         ["libtheorafile"] = "__Internal"
-    };
-
-    private static readonly HashSet<string> DynamicSDLImports = new HashSet<string>(StringComparer.Ordinal)
-    {
-        "SDL_AndroidBackButton",
-        "SDL_AndroidGetActivity",
-        "SDL_AndroidGetExternalStoragePath",
-        "SDL_AndroidGetExternalStorageState",
-        "SDL_AndroidGetInternalStoragePath",
-        "SDL_AndroidGetJNIEnv",
-        "SDL_AndroidRequestPermission",
-        "SDL_GetAndroidSDKVersion",
-        "SDL_IsAndroidTV",
-        "SDL_IsChromebook",
-        "SDL_IsDeXMode",
-        "SDL_SetWindowsMessageHook",
-        "SDL_WinRTGetDeviceFamily",
-        "SDL_WinRTRunApp"
     };
 
     private static int Main(string[] args)
@@ -46,7 +29,7 @@ internal static class Program
         Directory.CreateDirectory(Path.GetDirectoryName(output));
 
         Dictionary<string, int> rewritten = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        int retainedDynamicSDL = 0;
+        int stubbedPlatformImports = 0;
         using (AssemblyDefinition assembly = AssemblyDefinition.ReadAssembly(input, new ReaderParameters { InMemory = true, ReadSymbols = false }))
         {
             Dictionary<string, ModuleReference> moduleReferences = assembly.MainModule.ModuleReferences
@@ -61,8 +44,11 @@ internal static class Program
                     if (library != null && StaticLibraries.TryGetValue(library, out string pinvokeReplacement))
                     {
                         string entryPoint = string.IsNullOrEmpty(info.EntryPoint) ? method.Name : info.EntryPoint;
-                        if (string.Equals(library, "SDL2", StringComparison.OrdinalIgnoreCase) && DynamicSDLImports.Contains(entryPoint))
-                            retainedDynamicSDL++;
+                        if (string.Equals(library, "SDL2", StringComparison.OrdinalIgnoreCase) && IsPlatformOnlySDLImport(entryPoint))
+                        {
+                            ConvertToManagedDefaultStub(method);
+                            stubbedPlatformImports++;
+                        }
                         else
                         {
                             if (!moduleReferences.TryGetValue(pinvokeReplacement, out ModuleReference moduleReference))
@@ -89,9 +75,10 @@ internal static class Program
                     if (string.Equals(property.Name, "EntryPoint", StringComparison.Ordinal) && property.Argument.Value is string namedEntryPoint)
                         entryPoint = namedEntryPoint;
 
-                if (string.Equals(library, "SDL2", StringComparison.OrdinalIgnoreCase) && DynamicSDLImports.Contains(entryPoint))
+                if (string.Equals(library, "SDL2", StringComparison.OrdinalIgnoreCase) && IsPlatformOnlySDLImport(entryPoint))
                 {
-                    retainedDynamicSDL++;
+                    ConvertToManagedDefaultStub(method);
+                    stubbedPlatformImports++;
                     continue;
                 }
 
@@ -115,8 +102,47 @@ internal static class Program
             return 1;
         }
 
-        Console.WriteLine("Rewrote native imports: " + string.Join(", ", rewritten) + "; kept " + retainedDynamicSDL + " platform-specific SDL imports dynamic.");
+        Console.WriteLine("Rewrote native imports: " + string.Join(", ", rewritten) + "; replaced " + stubbedPlatformImports + " Android, Windows, and GDK SDL imports with managed default stubs.");
         return 0;
+    }
+
+    private static bool IsPlatformOnlySDLImport(string entryPoint)
+    {
+        return entryPoint.StartsWith("SDL_Android", StringComparison.Ordinal) ||
+            entryPoint.StartsWith("SDL_GetAndroid", StringComparison.Ordinal) ||
+            entryPoint.StartsWith("SDL_IsAndroid", StringComparison.Ordinal) ||
+            entryPoint.StartsWith("SDL_GDK", StringComparison.Ordinal) ||
+            entryPoint.StartsWith("SDL_WinRT", StringComparison.Ordinal) ||
+            entryPoint.StartsWith("SDL_RenderGetD3D", StringComparison.Ordinal) ||
+            entryPoint == "SDL_IsChromebook" ||
+            entryPoint == "SDL_IsDeXMode" ||
+            entryPoint == "SDL_SetWindowsMessageHook";
+    }
+
+    private static void ConvertToManagedDefaultStub(MethodDefinition method)
+    {
+        method.PInvokeInfo = null;
+        method.Attributes &= ~MethodAttributes.PInvokeImpl;
+        method.ImplAttributes = MethodImplAttributes.IL | MethodImplAttributes.Managed;
+        foreach (CustomAttribute attribute in method.CustomAttributes
+            .Where(candidate => candidate.AttributeType.FullName == "System.Runtime.InteropServices.DllImportAttribute")
+            .ToArray())
+            method.CustomAttributes.Remove(attribute);
+
+        MethodBody body = new MethodBody(method) { InitLocals = true, MaxStackSize = 1 };
+        ILProcessor il = body.GetILProcessor();
+        if (method.ReturnType.MetadataType == MetadataType.Void)
+        {
+            il.Append(il.Create(OpCodes.Ret));
+        }
+        else
+        {
+            VariableDefinition value = new VariableDefinition(method.Module.ImportReference(method.ReturnType));
+            body.Variables.Add(value);
+            il.Append(il.Create(OpCodes.Ldloc, value));
+            il.Append(il.Create(OpCodes.Ret));
+        }
+        method.Body = body;
     }
 
     private static IEnumerable<TypeDefinition> AllTypes(IEnumerable<TypeDefinition> types)

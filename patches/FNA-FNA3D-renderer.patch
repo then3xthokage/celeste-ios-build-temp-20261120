@@ -1,13 +1,22 @@
-diff --git a/include/FNA3D_SysRenderer.h b/include/FNA3D_SysRenderer.h
-index 0605350..47d358c 100644
---- a/include/FNA3D_SysRenderer.h
-+++ b/include/FNA3D_SysRenderer.h
-@@ -23,6 +23,8 @@
-  * Ethan "flibitijibibo" Lee <flibitijibibo@flibitijibibo.com>
-  *
-  */
-+#define FNA3D_DRIVER_VULKAN 1
-+#define FNA3D_DRIVER_OPENGL 1
- 
- #ifndef FNA3D_SYSRENDERER_H
- #define FNA3D_SYSRENDERER_H
+diff --git a/Xcode-iOS/FNA3D.xcodeproj/project.pbxproj b/Xcode-iOS/FNA3D.xcodeproj/project.pbxproj
+index a0f4d54..7ac6eae 100644
+--- a/Xcode-iOS/FNA3D.xcodeproj/project.pbxproj
++++ b/Xcode-iOS/FNA3D.xcodeproj/project.pbxproj
+@@ -304,7 +304,7 @@
+ 				GCC_NO_COMMON_BLOCKS = YES;
+ 				GCC_OPTIMIZATION_LEVEL = 0;
+ 				GCC_PREPROCESSOR_DEFINITIONS = (
+-					FNA3D_DRIVER_VULKAN,
++					"FNA3D_DRIVER_VULKAN=1",
+ 					MOJOSHADER_NO_VERSION_INCLUDE,
+ 					MOJOSHADER_USE_SDL_STDLIB,
+ 					MOJOSHADER_EFFECT_SUPPORT,
+@@ -385,7 +385,7 @@
+ 				GCC_C_LANGUAGE_STANDARD = gnu11;
+ 				GCC_NO_COMMON_BLOCKS = YES;
+ 				GCC_PREPROCESSOR_DEFINITIONS = (
+-					FNA3D_DRIVER_VULKAN,
++					"FNA3D_DRIVER_VULKAN=1",
+ 					MOJOSHADER_NO_VERSION_INCLUDE,
+ 					MOJOSHADER_USE_SDL_STDLIB,
+ 					MOJOSHADER_EFFECT_SUPPORT,
