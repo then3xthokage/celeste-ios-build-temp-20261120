@@ -10,6 +10,7 @@ using MonoMod;
 using MonoMod.Cil;
 using MonoMod.Utils;
 using celestemeow;
+using OpCodes = System.Reflection.Emit.OpCodes;
 
 namespace IOSInterpreterSmoke;
 
@@ -250,12 +251,12 @@ internal static class RuntimeProbe
             constructor.Body.Instructions.Remove(baseCall);
             Instruction aliasCall = constructor.Body.Instructions.First(instruction =>
                 instruction.Operand is Mono.Cecil.MethodReference called && called.Name == "orig_ctor");
-            aliasCall.OpCode = OpCodes.Callvirt;
+            aliasCall.OpCode = Mono.Cecil.Cil.OpCodes.Callvirt;
 
             Instruction originalFirst = original.Body.Instructions[0];
             ILProcessor originalIl = original.Body.GetILProcessor();
-            originalIl.InsertBefore(originalFirst, originalIl.Create(OpCodes.Ldarg_0));
-            originalIl.InsertBefore(originalFirst, originalIl.Create(OpCodes.Call,
+            originalIl.InsertBefore(originalFirst, originalIl.Create(Mono.Cecil.Cil.OpCodes.Ldarg_0));
+            originalIl.InsertBefore(originalFirst, originalIl.Create(Mono.Cecil.Cil.OpCodes.Call,
                 assembly.MainModule.ImportReference((Mono.Cecil.MethodReference)baseCall.Operand)));
 
             using (MemoryStream output = new MemoryStream())
