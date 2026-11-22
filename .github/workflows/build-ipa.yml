@@ -18,10 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          submodules: recursive
+          submodules: true
 
       - name: Apply iOS Everest hook integration
         run: git -C Everest apply ../patches/Everest-ios.patch
+
+      - name: Initialize Everest build dependencies
+        run: git -C Everest submodule update --init --recursive
 
       - uses: actions/setup-dotnet@v5
         with:
