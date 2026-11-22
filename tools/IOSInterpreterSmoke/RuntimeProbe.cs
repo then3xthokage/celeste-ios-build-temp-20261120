@@ -16,12 +16,18 @@ namespace IOSInterpreterSmoke;
 
 internal static class RuntimeProbe
 {
+    public static Action<string> Progress { get; set; }
+
     public static void Run()
     {
+        Mark("initialize hook runtime");
         IOSHookRuntime.Initialize();
+        Mark("Reflection.Emit probes");
         VerifyRuntimeCodeGeneration();
+        Mark("Cecil generated method probe");
         VerifyCecilGeneratedMethod();
 
+        Mark("read and weave hook fixture");
         using Stream fixtureResource = Assembly.GetExecutingAssembly().GetManifestResourceStream("ProbeFixture.dll");
         if (fixtureResource == null)
             throw new FileNotFoundException("The hook fixture was not embedded in the iOS smoke app.");
@@ -36,6 +42,7 @@ internal static class RuntimeProbe
         Assembly fixture = Assembly.Load(woven);
         IOSILHookRuntime.RegisterAssemblySnapshot(fixture, woven);
 
+        Mark("register module initializer hook");
         int moduleInitializerToken;
         using (Mono.Cecil.AssemblyDefinition definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(new MemoryStream(woven)))
         {
@@ -52,7 +59,9 @@ internal static class RuntimeProbe
             moduleHooksType.GetMethod("OnInitialize", BindingFlags.Public | BindingFlags.Static));
         IOSHookRuntime.AddOn(moduleInitializer, moduleHook);
 
+        Mark("NLua generated callback and proxy probes");
         VerifyNLuaCodeGeneration(fixture);
+        Mark("execute hooked module initializer");
         RuntimeHelpers.RunModuleConstructor(fixture.ManifestModule.ModuleHandle);
         Type moduleState = fixture.GetType("ProbeModuleInitializer", throwOnError: true);
         if ((int)moduleState.GetField("Value").GetValue(null) != 73)
@@ -60,8 +69,10 @@ internal static class RuntimeProbe
         AssertEqual("Global module initializer On hook on iOS interpreter", 1,
             moduleHooksType.GetField("Calls").GetValue(null));
 
+        Mark("Everest-style constructor chain");
         VerifyEverestStyleConstructor(fixture);
 
+        Mark("byref-like constructor hook");
         Type refLikeConstructorType = fixture.GetType("ProbeRefLikeConstructorTarget", throwOnError: true);
         ConstructorInfo refLikeConstructor = refLikeConstructorType.GetConstructor(
             new[] { typeof(int), typeof(bool).MakeByRefType() });
@@ -77,6 +88,7 @@ internal static class RuntimeProbe
             probeHooksType.GetField("RefLikeConstructorCalls").GetValue(null));
         IOSHookRuntime.RemoveOn(refLikeConstructor, refLikeHook);
 
+        Mark("ordinary On hook and removal");
         Type targetType = fixture.GetType("ProbeTarget", throwOnError: true);
         MethodInfo add = targetType.GetMethod("Add", BindingFlags.Public | BindingFlags.Static);
         Type hooksType = fixture.GetType("ProbeHooks", throwOnError: true);
@@ -87,6 +99,7 @@ internal static class RuntimeProbe
         IOSHookRuntime.RemoveOn(add, hook);
         AssertEqual("On hook removal", 10, add.Invoke(null, new object[] { 6, 4 }));
 
+        Mark("ILContext hook and removal");
         MethodInfo constant = targetType.GetMethod("Constant", BindingFlags.Public | BindingFlags.Static);
         ILContext.Manipulator editConstant = context =>
         {
@@ -109,6 +122,7 @@ internal static class RuntimeProbe
         IOSILHookRuntime.Remove(constant, editConstant);
         AssertEqual("IL hook removal", 5, constant.Invoke(null, null));
 
+        Mark("open generic type IL hooks");
         Type genericTypeDefinition = fixture.GetType("ProbeGenericTypeTarget`1", throwOnError: true);
         Type genericType = genericTypeDefinition.MakeGenericType(typeof(int));
         MethodInfo genericTypeMethodDefinition = genericTypeDefinition.GetMethod("GenericTypeConstant", BindingFlags.Public | BindingFlags.Static);
@@ -132,6 +146,7 @@ internal static class RuntimeProbe
         AssertEqual("Open generic method on a closed type hook removal on iOS interpreter", "original-open-method-on-type",
             genericTypeMethodClosed.Invoke(null, null)?.ToString());
 
+        Mark("open generic method IL hooks");
         Type genericTargetType = fixture.GetType("ProbeGenericMethodTarget", throwOnError: true);
         MethodInfo genericDefinition = genericTargetType.GetMethod("GenericConstant", BindingFlags.Public | BindingFlags.Static);
         MethodInfo genericClosed = genericDefinition.MakeGenericMethod(typeof(int));
@@ -151,6 +166,7 @@ internal static class RuntimeProbe
         IOSILHookRuntime.Remove(genericDefinition, editGeneric);
         AssertEqual("Open generic IL hook removal on iOS interpreter", "original-generic", genericClosed.Invoke(null, null)?.ToString());
 
+        Mark("generic reflected On hooks");
         Type genericHooks = fixture.GetType("ProbeHooks", throwOnError: true);
         object openUntypedHookIdentity = new object();
         IOSHookRuntime.AddOnReflected(genericDefinition,
@@ -198,6 +214,7 @@ internal static class RuntimeProbe
         AssertEqual("Open generic method reflected On callback count", 1,
             probeHooks.GetField("GenericMethodHookCalls").GetValue(null));
 
+        Mark("generic reflected detour hooks");
         object openEchoDetourIdentity = new object();
         IOSHookRuntime.AddDetour(openEchoTarget,
             probeHooks.GetMethod("DetourGenericMethod", BindingFlags.Public | BindingFlags.Static),
@@ -210,6 +227,7 @@ internal static class RuntimeProbe
         AssertEqual("Open generic method reflected detour callback count", 1,
             probeHooks.GetField("GenericMethodDetourCalls").GetValue(null));
 
+        Mark("generic instance detour hooks");
         Type genericInstanceTargetDefinition = fixture.GetTypes().Single(type =>
             type.IsGenericTypeDefinition &&
             type.Name.StartsWith("ProbeGenericInstanceTarget", StringComparison.Ordinal));
@@ -230,7 +248,10 @@ internal static class RuntimeProbe
         IOSHookRuntime.RemoveDetour(openInstanceEchoTarget, openInstanceDetourIdentity);
         AssertEqual("Open generic instance detour removal on iOS interpreter", 71,
             closedInstanceEchoTarget.Invoke(genericInstanceTarget, new object[] { 71 }));
+        Mark("all runtime probes complete");
     }
+
+    private static void Mark(string stage) => Progress?.Invoke(stage);
 
     private static byte[] ApplyEverestStyleConstructorShape(byte[] source)
     {

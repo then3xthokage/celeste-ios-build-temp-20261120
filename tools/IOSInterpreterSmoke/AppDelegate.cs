@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading.Tasks;
 using Foundation;
 using UIKit;
 
@@ -21,15 +22,20 @@ internal sealed class AppDelegate : UIApplicationDelegate
         string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         Directory.CreateDirectory(documents);
         string resultPath = Path.Combine(documents, "ios-interpreter-smoke.txt");
-        try
+        File.WriteAllText(resultPath, "RUNNING: app delegate entered");
+        RuntimeProbe.Progress = stage => File.WriteAllText(resultPath, "RUNNING: " + stage);
+        Task.Run(() =>
         {
-            RuntimeProbe.Run();
-            File.WriteAllText(resultPath, "PASS");
-        }
-        catch (Exception exception)
-        {
-            File.WriteAllText(resultPath, "FAIL\n" + exception);
-        }
+            try
+            {
+                RuntimeProbe.Run();
+                File.WriteAllText(resultPath, "PASS");
+            }
+            catch (Exception exception)
+            {
+                File.WriteAllText(resultPath, "FAIL\n" + exception);
+            }
+        });
         return true;
     }
 }
