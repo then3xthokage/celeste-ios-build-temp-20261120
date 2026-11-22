@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0-ios</TargetFramework>
+    <TargetFramework>net11.0-ios</TargetFramework>
     <OutputType>Exe</OutputType>
     <RuntimeIdentifier>ios-arm64</RuntimeIdentifier>
     <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
@@ -15,9 +15,9 @@
     <EnableCodeSigning>false</EnableCodeSigning>
     <BuildIpa>true</BuildIpa>
     <ValidateXcodeVersion>false</ValidateXcodeVersion>
-    <MtouchLink>SdkOnly</MtouchLink>
-    <UseInterpreter>true</UseInterpreter>
-    <EnableSGenConc>true</EnableSGenConc>
+    <UseMonoRuntime>false</UseMonoRuntime>
+    <DynamicCodeSupport>true</DynamicCodeSupport>
+    <PublishTrimmed>false</PublishTrimmed>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 

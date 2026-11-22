@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
+using System.Runtime;
 using System.Runtime.CompilerServices;
 using Mono.Cecil.Cil;
 using MonoMod;
@@ -16,6 +18,7 @@ internal static class RuntimeProbe
     public static void Run()
     {
         IOSHookRuntime.Initialize();
+        VerifyRuntimeCodeGeneration();
         VerifyCecilGeneratedMethod();
 
         using Stream fixtureResource = Assembly.GetExecutingAssembly().GetManifestResourceStream("ProbeFixture.dll");
@@ -306,6 +309,67 @@ internal static class RuntimeProbe
         AssertEqual("MonoMod Cecil generated method", 42, dmd.Generate().Invoke(null, null));
     }
 
+    private static void VerifyRuntimeCodeGeneration()
+    {
+        if (!RuntimeFeature.IsDynamicCodeSupported)
+            throw new PlatformNotSupportedException("The iOS runtime does not report support for dynamic MSIL.");
+        if (RuntimeFeature.IsDynamicCodeCompiled)
+            throw new InvalidOperationException("The iOS smoke app must interpret generated MSIL without compiling native code.");
+
+        GCLatencyMode originalLatencyMode = GCSettings.LatencyMode;
+        try
+        {
+            GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
+        }
+        finally
+        {
+            GCSettings.LatencyMode = originalLatencyMode;
+        }
+
+        DynamicMethod dynamicMethod = new DynamicMethod("ios_dynamic_method_smoke", typeof(int),
+            new[] { typeof(int), typeof(int) }, typeof(RuntimeProbe).Module, true);
+        ILGenerator dynamicIL = dynamicMethod.GetILGenerator();
+        dynamicIL.Emit(OpCodes.Ldarg_0);
+        dynamicIL.Emit(OpCodes.Ldarg_1);
+        dynamicIL.Emit(OpCodes.Add);
+        dynamicIL.Emit(OpCodes.Ret);
+        Func<int, int, int> sum = (Func<int, int, int>)dynamicMethod.CreateDelegate(typeof(Func<int, int, int>));
+        AssertEqual("CoreCLR interpreted DynamicMethod", 42, sum(19, 23));
+
+        AssemblyBuilder assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("CelesteIOS.DynamicTypeSmoke"), AssemblyBuilderAccess.Run);
+        ModuleBuilder module = assembly.DefineDynamicModule("smoke");
+        TypeBuilder generated = module.DefineType("GeneratedOverride", TypeAttributes.Public | TypeAttributes.Sealed,
+            typeof(RuntimeEmitBase));
+        FieldBuilder bias = generated.DefineField("bias", typeof(int), FieldAttributes.Private | FieldAttributes.InitOnly);
+        ConstructorBuilder constructor = generated.DefineConstructor(MethodAttributes.Public,
+            CallingConventions.Standard, Type.EmptyTypes);
+        ILGenerator constructorIL = constructor.GetILGenerator();
+        constructorIL.Emit(OpCodes.Ldarg_0);
+        constructorIL.Emit(OpCodes.Call, typeof(RuntimeEmitBase).GetConstructor(
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, Type.EmptyTypes, null));
+        constructorIL.Emit(OpCodes.Ldarg_0);
+        constructorIL.Emit(OpCodes.Ldc_I4_7);
+        constructorIL.Emit(OpCodes.Stfld, bias);
+        constructorIL.Emit(OpCodes.Ret);
+
+        MethodInfo baseMethod = typeof(RuntimeEmitBase).GetMethod(nameof(RuntimeEmitBase.Transform));
+        MethodBuilder overrideMethod = generated.DefineMethod(nameof(RuntimeEmitBase.Transform),
+            MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig,
+            typeof(int), new[] { typeof(int) });
+        ILGenerator overrideIL = overrideMethod.GetILGenerator();
+        overrideIL.Emit(OpCodes.Ldarg_1);
+        overrideIL.Emit(OpCodes.Ldarg_0);
+        overrideIL.Emit(OpCodes.Ldfld, bias);
+        overrideIL.Emit(OpCodes.Add);
+        overrideIL.Emit(OpCodes.Ret);
+        generated.DefineMethodOverride(overrideMethod, baseMethod);
+
+        Type generatedType = generated.CreateType();
+        RuntimeEmitBase instance = (RuntimeEmitBase)Activator.CreateInstance(generatedType);
+        AssertEqual("CoreCLR interpreted dynamic assembly override", 49, instance.Transform(42));
+    }
+
     private static void VerifyNLuaCodeGeneration(Assembly fixture)
     {
         Assembly nlua = typeof(NLua.Lua).Assembly;
@@ -354,4 +418,10 @@ internal static class RuntimeProbe
         }
         throw new InvalidOperationException("The open generic IL smoke target string instruction was not found.");
     }
+}
+
+public abstract class RuntimeEmitBase
+{
+    protected RuntimeEmitBase() { }
+    public abstract int Transform(int value);
 }

@@ -1,14 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0-ios</TargetFramework>
+    <TargetFramework>net11.0-ios</TargetFramework>
     <RuntimeIdentifier>iossimulator-arm64</RuntimeIdentifier>
     <OutputType>Exe</OutputType>
     <ApplicationTitle>iOS Hook Runtime Smoke</ApplicationTitle>
     <ApplicationId>gay.rooot.celestemeow.smoke</ApplicationId>
     <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
     <EnableCodeSigning>false</EnableCodeSigning>
-    <MtouchLink>SdkOnly</MtouchLink>
-    <UseInterpreter>true</UseInterpreter>
+    <UseMonoRuntime>false</UseMonoRuntime>
+    <DynamicCodeSupport>true</DynamicCodeSupport>
+    <PublishTrimmed>false</PublishTrimmed>
     <DefineConstants>$(DefineConstants);__IOS__</DefineConstants>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>

@@ -13,7 +13,7 @@ concurrency:
 jobs:
   build:
     if: github.ref == 'refs/heads/celeste-ios-build'
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v5
@@ -34,6 +34,7 @@ jobs:
           dotnet-version: |
             8.0.428
             9.0.x
+            11.0.100
 
       - name: Install Mono strong-name utility when needed
         shell: bash
@@ -184,19 +185,24 @@ jobs:
             ~/.dotnet/tools
           key: celeste-dotnet-${{ runner.os }}-${{ steps.input-paths.outputs.game_hash }}-${{ hashFiles('celestemeow/*.csproj', 'celestemeow.sln', 'global.json', 'celestemeow/IOSHook*.cs', 'celestemeow/IOSILHookRuntime.cs', 'tools/IOSHookWeaver/*.cs', 'tools/IOSHookWeaver.SmokeTests/**/*.cs', 'tools/IOSHookWeaver.SmokeTests/**/*.csproj', 'tools/IOSInterpreterSmoke/**/*.cs', 'tools/IOSInterpreterSmoke/**/*.csproj', 'tools/IOSNativeImportPatcher/*.cs', 'patches/Everest-ios.patch', 'patches/MonoMod-ios.patch') }}-ilspy-8.0.0.7246-preview3
 
-      - name: Install .NET iOS workload when needed
+      - name: Install .NET 11 iOS workload
         working-directory: ${{ runner.temp }}
         shell: bash
         run: |
           set -euo pipefail
           sdk9_version="$(dotnet --list-sdks | awk '$1 ~ /^9\./ { version=$1 } END { print version }')"
+          sdk11_version="$(dotnet --list-sdks | awk '$1 == "11.0.100" { print $1 }')"
           if [ -z "$sdk9_version" ]; then
-            echo 'The .NET 9 SDK required by the iOS hook smoke dependencies is missing.' >&2
+            echo 'The .NET 9 SDK required by the Everest build and hook compatibility tests is missing.' >&2
+            exit 1
+          fi
+          if [ -z "$sdk11_version" ]; then
+            echo 'The .NET 11 SDK required by the CoreCLR iOS app is missing.' >&2
             exit 1
           fi
           sdk8_version="$(dotnet --list-sdks | awk '$1 == "8.0.428" { print $1 }')"
           if [ -z "$sdk8_version" ]; then
-            echo 'The .NET 8.0.428 SDK required by the iOS app build is missing.' >&2
+            echo 'The .NET 8.0.428 SDK required to run the net8 hook compatibility tools is missing.' >&2
             exit 1
           fi
           dotnet_path="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$(command -v dotnet)")"
@@ -205,16 +211,14 @@ jobs:
           echo "DOTNET_ROOT_ARM64=$dotnet_root" >> "$GITHUB_ENV"
           export DOTNET_ROOT="$dotnet_root"
           export DOTNET_ROOT_ARM64="$dotnet_root"
-          for sdk_version in "$sdk9_version" "$sdk8_version"; do
-            printf '{"sdk":{"version":"%s","rollForward":"latestPatch"}}\n' "$sdk_version" > "$RUNNER_TEMP/global.json"
-            echo "Checking iOS workload for .NET SDK $sdk_version"
-            dotnet --version
-            if ! dotnet workload list | grep -Eq '(^|[[:space:]])ios([[:space:]]|$)'; then
-              dotnet workload install ios --skip-manifest-update
-            fi
-          done
-          # Later hook smoke steps use .NET 9; the app's repository global.json
-          # selects .NET 8.0.428 when build.sh compiles the iOS app.
+          printf '{"sdk":{"version":"%s","rollForward":"latestPatch"}}\n' "$sdk11_version" > "$RUNNER_TEMP/global.json"
+          echo "Checking iOS workload for .NET SDK $sdk11_version"
+          dotnet --version
+          if ! dotnet workload list | grep -Eq '(^|[[:space:]])ios([[:space:]]|$)'; then
+            dotnet workload install ios --skip-manifest-update
+          fi
+          # Hook compatibility tests use .NET 9; the iOS app and runtime smoke
+          # use .NET 11 CoreCLR so Reflection.Emit executes through its MSIL interpreter.
           printf '{"sdk":{"version":"%s","rollForward":"latestPatch"}}\n' "$sdk9_version" > "$RUNNER_TEMP/global.json"
           if ! dotnet --list-runtimes | grep -Eq '^Microsoft.NETCore.App 6\.0\.'; then
             curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
@@ -228,11 +232,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          printf '{"sdk":{"version":"11.0.100","rollForward":"latestPatch"}}\n' > "$RUNNER_TEMP/global.json"
           smoke_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/IOSInterpreterSmoke.csproj"
           fixture_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/ProbeFixture/ProbeFixture.csproj"
           dotnet build "$fixture_project" --configuration Release
           dotnet build "$smoke_project" --configuration Release -r iossimulator-arm64 -p:EnableCodeSigning=false
-          app_path="$(find "$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/bin/Release/net8.0-ios" -maxdepth 3 -type d -name 'IOSInterpreterSmoke.app' -print -quit)"
+          app_path="$(find "$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/bin/Release/net11.0-ios" -maxdepth 3 -type d -name 'IOSInterpreterSmoke.app' -print -quit)"
           if [ -z "$app_path" ]; then
             echo 'The iOS interpreter smoke app bundle was not produced.' >&2
             exit 1
@@ -260,7 +265,7 @@ jobs:
           fi
           cat "$result_path"
           if ! grep -qx 'PASS' "$result_path"; then
-            echo 'MonoMod Cecil or the woven On/IL hook path failed on the iOS interpreter.' >&2
+            echo 'CoreCLR dynamic-code support or the woven hook path failed on the iOS interpreter.' >&2
             exit 1
           fi
           xcrun simctl terminate "$device_id" "$bundle_id" || true

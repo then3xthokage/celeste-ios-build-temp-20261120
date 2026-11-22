@@ -436,10 +436,6 @@ root = pathlib.Path(sys.argv[1])
 fmod_libraries = ("libfmodstudio", "libfmod", "fmodstudio", "fmod")
 fmod_counts = {library: 0 for library in fmod_libraries}
 fmod_dynamic_counts = {"FMOD_DSP_GetCPUUsage": 0}
-latency_mode_count = 0
-latency_mode_pattern = re.compile(
-    r'(?m)^([ \t]*)GCSettings\.LatencyMode[ \t]*=[ \t]*[^;\r\n]*;[ \t]*(?://.*)?$'
-)
 
 def keep_unavailable_imports_dynamic(source, fallback_libraries):
     pattern = re.compile(
@@ -464,10 +460,6 @@ def keep_unavailable_imports_dynamic(source, fallback_libraries):
 for path in root.rglob("*.cs"):
     source = path.read_text()
     updated = source.replace("Assembly.GetEntryAssembly()", "Assembly.GetExecutingAssembly()")
-    updated, removed_latency_mode = latency_mode_pattern.subn(
-        r'\1// GCSettings.LatencyMode is unsupported on iOS', updated
-    )
-    latency_mode_count += removed_latency_mode
     for library in fmod_libraries:
         pattern = re.compile(
             r'(\[\s*DllImport\s*\(\s*)"' + re.escape(library) + r'"'
@@ -484,10 +476,6 @@ print("Patched FMOD native imports: " + ", ".join(f"{name}={count}" for name, co
 if fmod_dynamic_counts["FMOD_DSP_GetCPUUsage"] == 0:
     raise SystemExit("Could not preserve the unavailable FMOD_DSP_GetCPUUsage import dynamically")
 print("Kept unavailable FMOD import dynamic: FMOD_DSP_GetCPUUsage")
-if latency_mode_count == 0:
-    raise SystemExit("Could not find the GCSettings.LatencyMode assignment that fails on iOS")
-print(f"Removed unsupported GCSettings.LatencyMode assignments: {latency_mode_count}")
-
 settings = root / "Celeste" / "Settings.cs"
 source = settings.read_text()
 start = source.find('[XmlAnyElement("LaunchInDebugModeComment")]')
@@ -740,7 +728,6 @@ done
 
 if ! dotnet publish "$script_dir/celestemeow/ci-ios.csproj" \
 	--configuration Release \
-	--framework net8.0-ios \
 	--runtime ios-arm64 \
 	-p:EnableCodeSigning=false \
 	-p:BuildIpa=true \
