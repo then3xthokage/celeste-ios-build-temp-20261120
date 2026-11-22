@@ -292,6 +292,7 @@ apply_patch "$script_dir/patches/Everest-ios.patch"
 cd "$script_dir" || cd_fail
 
 info "applying patches to FNA"
+cd "$script_dir/FNA" || cd_fail
 apply_patch "$script_dir/patches/FNA.patch"
 cd "$script_dir/FNA/lib/FNA3D" || cd_fail
 apply_patch "$script_dir/patches/FNA-FNA3D-renderer.patch"
