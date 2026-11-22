@@ -203,6 +203,7 @@ jobs:
           xcodebuild -version
 
       - name: Verify woven hooks on the iOS interpreter
+        working-directory: ${{ runner.temp }}
         shell: bash
         run: |
           set -euo pipefail
