@@ -1,0 +1,820 @@
+diff --git a/Celeste.Mod.mm/Celeste.Mod.mm.csproj b/Celeste.Mod.mm/Celeste.Mod.mm.csproj
+index 058323b2..5cd163d4 100644
+--- a/Celeste.Mod.mm/Celeste.Mod.mm.csproj
++++ b/Celeste.Mod.mm/Celeste.Mod.mm.csproj
+@@ -19,11 +19,13 @@
+ 
+   <ItemGroup>
+     <Reference Include="Celeste">
+-      <HintPath>..\lib-stripped\Celeste.exe</HintPath>
++      <HintPath Condition="'$(EverestCelesteReference)' != ''">$(EverestCelesteReference)</HintPath>
++      <HintPath Condition="'$(EverestCelesteReference)' == ''">..\lib-stripped\Celeste.exe</HintPath>
+       <Private>False</Private>
+     </Reference>
+     <Reference Include="FNA">
+-      <HintPath>..\lib-stripped\FNA.dll</HintPath>
++      <HintPath Condition="'$(EverestFNAReference)' != ''">$(EverestFNAReference)</HintPath>
++      <HintPath Condition="'$(EverestFNAReference)' == ''">..\lib-stripped\FNA.dll</HintPath>
+       <Private>False</Private>
+     </Reference>
+     <Reference Include="Steamworks.NET">
+diff --git a/Celeste.Mod.mm/Mod/Everest/Everest.cs b/Celeste.Mod.mm/Mod/Everest/Everest.cs
+index e473aa50..e513e360 100644
+--- a/Celeste.Mod.mm/Mod/Everest/Everest.cs
++++ b/Celeste.Mod.mm/Mod/Everest/Everest.cs
+@@ -31,7 +31,7 @@ namespace Celeste.Mod {
+         // NOTE: THIS MUST BE THE FIRST THING SET UP BY THE CLASS CONSTRUCTOR.
+         // OTHERWISE OLYMPUS WON'T BE ABLE TO FIND THIS!
+         // The following line gets replaced by the buildbot automatically.
+-        public readonly static string VersionString = "0.0.0-dev";
++        public readonly static string VersionString = "1.6696.0-ios";
+         /// <summary>
+         /// The currently installed Everest build in string form.
+         /// </summary>
+@@ -350,7 +350,12 @@ namespace Celeste.Mod {
+             Assembly.Load("Newtonsoft.Json");
+             Assembly.Load("Jdenticon");
+ 
+-            if (!File.Exists(Path.Combine(PathGame, "EverestXDGFlag"))) {
++            string iosDataPath = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.EverestDataPath") as string;
++            if (!string.IsNullOrWhiteSpace(iosDataPath)) {
++                XDGPaths = true;
++                Directory.CreateDirectory(PathEverest = Path.GetFullPath(iosDataPath));
++                Directory.CreateDirectory(Path.Combine(PathEverest, "Mods"));
++            } else if (!File.Exists(Path.Combine(PathGame, "EverestXDGFlag"))) {
+                 XDGPaths = false;
+                 PathEverest = PathGame;
+             } else {
+diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
+index b82f6efc..d9286eed 100644
+--- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
++++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
+@@ -32,11 +32,21 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         public static Func<LegacyDetour, MethodBase, MethodBase> OnGenerateTrampoline;
+ 
+         private Hook actualHook;
+-
+-        public bool IsValid { get; private set; } = true;
+-        public bool IsApplied { get; private set; }
++        private bool _iosHook;
++        private bool _iosValid = true;
++        private bool _iosApplied;
++        private bool _nativeValid = true;
++        private bool _nativeApplied;
++        private LegacyDetourConfig _iosConfig;
++
++        public bool IsValid { get => _iosHook ? _iosValid : _nativeValid; private set { if (_iosHook) _iosValid = value; else _nativeValid = value; } }
++        public bool IsApplied { get => _iosHook ? _iosApplied : _nativeApplied; private set { if (_iosHook) _iosApplied = value; else _nativeApplied = value; } }
+         private bool IsTop {
+             get {
++                if (_iosHook) {
++                    Func<MethodBase, object, int> index = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.DetourIndex") as Func<MethodBase, object, int>;
++                    return index?.Invoke(Method, this) == 0;
++                }
+                 MethodDetourInfo info = DetourManager.GetDetourInfo(Method);
+                 using (info.WithLock())
+                     return info.FirstDetour == actualHook?.DetourInfo;
+@@ -46,6 +56,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         // NOTE: This behaves slightly differently - legacy MonoMod kept non-applied detours in the chain as well
+         public int Index {
+             get {
++                if (_iosHook) {
++                    if (_iosApplied) return -1;
++                    Func<MethodBase, object, int> index = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.DetourIndex") as Func<MethodBase, object, int>;
++                    return index?.Invoke(Method, this) ?? 0;
++                }
+                 if (actualHook?.IsApplied ?? false)
+                     return -1;
+ 
+@@ -57,6 +72,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+         public int MaxIndex {
+             get {
++                if (_iosHook) {
++                    Func<MethodBase, int> count = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.DetourCount") as Func<MethodBase, int>;
++                    return count?.Invoke(Method) ?? 0;
++                }
+                 MethodDetourInfo info = DetourManager.GetDetourInfo(Method);
+                 using (info.WithLock())
+                     return info.Detours.Count();
+@@ -73,6 +92,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                 if (_Priority == value)
+                     return;
+                 _Priority = value;
++                if (_iosHook) _iosConfig.Priority = value;
+                 _Refresh();
+             }
+         }
+@@ -86,6 +106,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                 if (_ID == value)
+                     return;
+                 _ID = value;
++                if (_iosHook) _iosConfig.ID = value;
+                 _Refresh();
+             }
+         }
+@@ -100,6 +121,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                     if (value != null)
+                         foreach (string id in value)
+                             _Before.Add(id);
++                    if (_iosHook) _iosConfig.Before = _Before.ToArray();
+                     _Refresh();
+                 }
+             }
+@@ -116,6 +138,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                     if (value != null)
+                         foreach (string id in value)
+                             _After.Add(id);
++                    if (_iosHook) _iosConfig.After = _After.ToArray();
+                     _Refresh();
+                 }
+             }
+@@ -136,7 +159,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+             Method = from;
+             Target = to;
+-            TargetReal = PlatformTriple.Current.GetRealDetourTarget(from, to);
++            TargetReal = to;
+ 
+             _GlobalIndex = AcquireGlobalIndex();
+             _Priority = config.Priority;
+@@ -147,6 +170,18 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (config.After != null)
+                 _After.AddRange(config.After);
+ 
++            // On iOS the static hook gate is the only detour backend. Avoid
++            // creating or pinning DynamicMethods and native trampolines.
++            if (AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddDetour") is Action<MethodBase, MethodInfo, object, object>) {
++                _iosHook = true;
++                _iosConfig = config;
++                if (!config.ManualApply)
++                    Apply();
++                return;
++            }
++
++            TargetReal = PlatformTriple.Current.GetRealDetourTarget(from, to);
++
+             // Generate a "chained trampoline" DynamicMethod.
+             ParameterInfo[] args = Method.GetParameters();
+             Type[] argTypes;
+@@ -204,6 +239,17 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
+                 throw new ObjectDisposedException(nameof(LegacyDetour));
+ 
++            if (_iosHook) {
++                if (_iosApplied || !(OnDetour?.InvokeWhileTrue(this, Method, Target) ?? true))
++                    return;
++                Action<MethodBase, MethodInfo, object, object> add = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddDetour") as Action<MethodBase, MethodInfo, object, object>;
++                if (add == null)
++                    throw new InvalidOperationException("The iOS managed detour backend is not available.");
++                add(Method, (MethodInfo) Target, this, _iosConfig);
++                _iosApplied = true;
++                return;
++            }
++
+             if (IsApplied || !(OnDetour?.InvokeWhileTrue(this, Method, Target) ?? true))
+                 return;
+ 
+@@ -215,6 +261,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
+                 throw new ObjectDisposedException(nameof(LegacyDetour));
+ 
++            if (_iosHook) {
++                if (!_iosApplied || !(OnUndo?.InvokeWhileTrue(this) ?? true))
++                    return;
++                Action<MethodBase, object> remove = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.RemoveDetour") as Action<MethodBase, object>;
++                remove?.Invoke(Method, this);
++                _iosApplied = false;
++                return;
++            }
++
+             if (!IsApplied || !(OnUndo?.InvokeWhileTrue(this) ?? true))
+                 return;
+ 
+@@ -226,6 +281,12 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
+                 return;
+ 
++            if (_iosHook) {
++                Undo();
++                _iosValid = false;
++                return;
++            }
++
+             Undo();
+             IsValid = false;
+         }
+@@ -242,6 +303,16 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
+                 return;
+ 
++            if (_iosHook) {
++                if (!_iosApplied) return;
++                Action<MethodBase, object> remove = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.RemoveDetour") as Action<MethodBase, object>;
++                Action<MethodBase, MethodInfo, object, object> add = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddDetour") as Action<MethodBase, MethodInfo, object, object>;
++                remove?.Invoke(Method, this);
++                if (add == null) throw new InvalidOperationException("The iOS managed detour backend is not available.");
++                add(Method, (MethodInfo) Target, this, _iosConfig);
++                return;
++            }
++
+             actualHook?.Dispose();
+             if (IsApplied) {
+                 actualHook = new Hook(Method, (MethodInfo) Target, LegacyDetourContext.CreateLegacyDetourConfig(ID, Priority, Before, After, GlobalIndex));
+@@ -260,6 +331,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (remoteTrampoline != null)
+                 return remoteTrampoline;
+ 
++            if (_iosHook)
++                throw new NotSupportedException("GenerateTrampoline(MethodBase) cannot return an interpreted iOS trampoline; use GenerateTrampoline<T>() instead.");
++
+             if (signature == null)
+                 signature = Target;
+ 
+@@ -294,6 +368,12 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!typeof(Delegate).IsAssignableFrom(typeof(T)))
+                 throw new InvalidOperationException($"Type {typeof(T)} not a delegate type.");
+ 
++            if (_iosHook) {
++                Func<MethodBase, object, Type, Delegate> create = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.CreateDetourTrampoline") as Func<MethodBase, object, Type, Delegate>;
++                if (create == null) throw new InvalidOperationException("The iOS detour trampoline backend is not available.");
++                return (T) create(Method, this, typeof(T));
++            }
++
+             return GenerateTrampoline(typeof(T).GetMethod("Invoke")).CreateDelegate(typeof(T)) as T;
+         }
+     }
+diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
+index 5ab6d3d7..66ebdf53 100644
+--- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
++++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
+@@ -25,8 +25,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         public static Func<LegacyHook, bool> OnUndo;
+         public static Func<LegacyHook, MethodBase, MethodBase> OnGenerateTrampoline;
+ 
+-        public bool IsValid => _Detour.IsValid;
+-        public bool IsApplied => _Detour.IsApplied;
++        private bool _iosHook;
++        private bool _iosValid = true;
++        private bool _iosApplied;
++        private LegacyHookConfig _iosConfig;
++
++        public bool IsValid => _iosHook ? _iosValid : _Detour.IsValid;
++        public bool IsApplied => _iosHook ? _iosApplied : _Detour.IsApplied;
+ 
+         public readonly MethodBase Method;
+         public readonly MethodBase Target;
+@@ -96,6 +101,17 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+             MethodInfo origInvoke = _OrigDelegateInvoke = origType?.GetMethod("Invoke");
+ 
++            // iOS uses woven managed gates rather than executable trampolines.
++            // The runtime invokes this original hook method through reflection and
++            // supplies an interpreted orig delegate when the signature requests it.
++            if (AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddReflectedOn") is Action<MethodBase, MethodInfo, object, object, object>) {
++                _iosHook = true;
++                _iosConfig = config;
++                if (!config.ManualApply)
++                    Apply();
++                return;
++            }
++
+             DynamicMethodDefinition dmd;
+             ILProcessor il;
+ 
+@@ -208,6 +224,17 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
+                 throw new ObjectDisposedException(nameof(LegacyHook));
+ 
++            if (_iosHook) {
++                if (_iosApplied || !(OnDetour?.InvokeWhileTrue(this, Method, Target, DelegateTarget) ?? true))
++                    return;
++                Action<MethodBase, MethodInfo, object, object, object> add = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddReflectedOn") as Action<MethodBase, MethodInfo, object, object, object>;
++                if (add == null)
++                    throw new InvalidOperationException("The iOS managed hook backend is not available.");
++                add(Method, (MethodInfo) Target, DelegateTarget, this, _iosConfig);
++                _iosApplied = true;
++                return;
++            }
++
+             if (!IsApplied && !(OnDetour?.InvokeWhileTrue(this, Method, Target, DelegateTarget) ?? true))
+                 return;
+ 
+@@ -218,6 +245,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
+                 throw new ObjectDisposedException(nameof(LegacyHook));
+ 
++            if (_iosHook) {
++                if (!_iosApplied || !(OnUndo?.InvokeWhileTrue(this) ?? true))
++                    return;
++                Action<MethodBase, object> remove = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.RemoveReflectedOn") as Action<MethodBase, object>;
++                remove?.Invoke(Method, this);
++                _iosApplied = false;
++                return;
++            }
++
+             if (IsApplied && !(OnUndo?.InvokeWhileTrue(this) ?? true))
+                 return;
+ 
+@@ -230,6 +266,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
+                 return;
+ 
++            if (_iosHook) {
++                Undo();
++                _iosValid = false;
++                _Free();
++                return;
++            }
++
+             _Detour.Free();
+             _Free();
+         }
+@@ -252,6 +295,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!typeof(Delegate).IsAssignableFrom(typeof(T)))
+                 throw new InvalidOperationException($"Type {typeof(T)} not a delegate type.");
+ 
++            if (_iosHook) {
++                Func<MethodBase, object, Type, Delegate> create = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.CreateDetourTrampoline") as Func<MethodBase, object, Type, Delegate>;
++                if (create == null)
++                    throw new InvalidOperationException("The iOS managed trampoline backend is not available.");
++                return (T) create(Method, this, typeof(T));
++            }
++
+             return GenerateTrampoline(typeof(T).GetMethod("Invoke")).CreateDelegate(typeof(T)) as T;
+         }
+ 
+diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
+index 15b1c509..61289b9e 100644
+--- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
++++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
+@@ -19,6 +19,74 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+         private static ConcurrentDictionary<(MethodBase, Delegate), Hook> Hooks = new ConcurrentDictionary<(MethodBase, Delegate), Hook>();
+         private static ConcurrentDictionary<(MethodBase, Delegate), ILHook> ILHooks = new ConcurrentDictionary<(MethodBase, Delegate), ILHook>();
++        private static ConcurrentDictionary<(MethodBase, Delegate), byte> IOSHooks = new ConcurrentDictionary<(MethodBase, Delegate), byte>();
++        private static ConcurrentDictionary<(MethodBase, Delegate), byte> IOSILHooks = new ConcurrentDictionary<(MethodBase, Delegate), byte>();
++
++        private static bool TryAddIOSHook(MethodBase method, Delegate hookDelegate) {
++            Action<MethodBase, Delegate, object> add = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddOn") as Action<MethodBase, Delegate, object>;
++            if (add == null)
++                return false;
++
++            if (IsEverestInternalMethod(method) && IsCoreModCaller(hookDelegate))
++                throw new InvalidOperationException("Core mods may not add hooks to Everest internal methods");
++
++            var key = (method, hookDelegate);
++            if (!IOSHooks.TryAdd(key, 0)) {
++                MonoModPolice.ReportMonoModCrime($"Double On. hook registered on method {method} (hook method: {hookDelegate.Method})", hookDelegate.Method);
++                return true;
++            }
++
++            try {
++                add(method, hookDelegate, LegacyDetourContext.GetCurrentDetourConfig(false, IsLegacyMMCaller(hookDelegate)));
++            } catch {
++                IOSHooks.TryRemove(key, out _);
++                throw;
++            }
++            return true;
++        }
++
++        private static bool TryRemoveIOSHook(MethodBase method, Delegate hookDelegate) {
++            var key = (method, hookDelegate);
++            if (!IOSHooks.TryRemove(key, out _))
++                return false;
++
++            Action<MethodBase, Delegate> remove = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.RemoveOn") as Action<MethodBase, Delegate>;
++            remove?.Invoke(method, hookDelegate);
++            return true;
++        }
++
++        private static bool TryAddIOSILHook(MethodBase method, Delegate callback) {
++            Action<MethodBase, Delegate, object> add = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddIL") as Action<MethodBase, Delegate, object>;
++            if (add == null)
++                return false;
++
++            if (IsEverestInternalMethod(method) && IsCoreModCaller(callback))
++                throw new InvalidOperationException("Core mods may not add hooks to Everest internal methods");
++
++            var key = (method, callback);
++            if (!IOSILHooks.TryAdd(key, 0)) {
++                MonoModPolice.ReportMonoModCrime($"Double IL. hook registered on method {method} (modifier method: {callback.Method})", callback.Method);
++                return true;
++            }
++
++            try {
++                add(method, callback, LegacyDetourContext.GetCurrentDetourConfig(true, IsLegacyMMCaller(callback)));
++            } catch {
++                IOSILHooks.TryRemove(key, out _);
++                throw;
++            }
++            return true;
++        }
++
++        private static bool TryRemoveIOSILHook(MethodBase method, Delegate callback) {
++            var key = (method, callback);
++            if (!IOSILHooks.TryRemove(key, out _))
++                return false;
++
++            Action<MethodBase, Delegate> remove = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.RemoveIL") as Action<MethodBase, Delegate>;
++            remove?.Invoke(method, callback);
++            return true;
++        }
+ 
+         private static bool IsEverestInternalMethod(MethodBase method) {
+             for (Type type = method.DeclaringType; type != null; type = type.DeclaringType)
+@@ -45,6 +113,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+         public static void Add<T>(MethodBase method, Delegate hookDelegate) where T : Delegate => Add(method, hookDelegate);
+         public static void Add(MethodBase method, Delegate hookDelegate) {
++            if (TryAddIOSHook(method, hookDelegate))
++                return;
++
+             if (IsEverestInternalMethod(method) && IsCoreModCaller(hookDelegate))
+                 throw new InvalidOperationException("Core mods may not add hooks to Everest internal methods");
+ 
+@@ -60,6 +131,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+         public static void Remove<T>(MethodBase method, Delegate hookDelegate) where T : Delegate => Remove(method, hookDelegate);
+         public static void Remove(MethodBase method, Delegate hookDelegate) {
++            if (TryRemoveIOSHook(method, hookDelegate))
++                return;
++
+             if (IsEverestInternalMethod(method) && IsCoreModCaller(hookDelegate))
+                 throw new InvalidOperationException("Core mods may not remove hooks from Everest internal methods");
+ 
+@@ -69,6 +143,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+         public static void Modify<T>(MethodBase method, Delegate callback) where T : Delegate => Modify(method, callback);
+         public static void Modify(MethodBase method, Delegate callback) {
++            if (TryAddIOSILHook(method, callback))
++                return;
++
+             if (IsEverestInternalMethod(method) && IsCoreModCaller(callback))
+                 throw new InvalidOperationException("Core mods may not add hooks to Everest internal methods");
+ 
+@@ -83,6 +160,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+         public static void Unmodify<T>(MethodBase method, Delegate callback) => Unmodify(method, callback);
+         public static void Unmodify(MethodBase method, Delegate callback) {
++            if (TryRemoveIOSILHook(method, callback))
++                return;
++
+             if (IsEverestInternalMethod(method) && IsCoreModCaller(callback))
+                 throw new InvalidOperationException("Core mods may not remove hooks from Everest internal methods");
+ 
+@@ -91,6 +171,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         }
+ 
+         public static void Clear() {
++            if (IOSHooks.Count > 0 || IOSILHooks.Count > 0) {
++                Action clear = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.Clear") as Action;
++                clear?.Invoke();
++                IOSHooks.Clear();
++                IOSILHooks.Clear();
++            }
++
+             foreach (Hook hook in Hooks.Values)
+                 hook.Dispose();
+             Hooks.Clear();
+diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs
+index 1e53c174..470e5a15 100644
+--- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs
++++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs
+@@ -33,6 +33,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         internal static uint AcquireGlobalIndex() => Interlocked.Increment(ref _GlobalIndexNext)-1;
+ 
+         private ILHook actualHook;
++        private bool IOSManagedBackend => AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddIL") is Action<MethodBase, Delegate, object>;
+ 
+         public bool IsValid { get; private set; } = true;
+         public bool IsApplied { get; private set; }
+@@ -40,6 +41,12 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         // NOTE: This behaves slightly differently - legacy MonoMod kept non-applied hooks in the chain as well
+         public int Index {
+             get {
++                if (IOSManagedBackend) {
++                    if (IsApplied)
++                        return -1;
++                    Func<MethodBase, int> count = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.ILHookCount") as Func<MethodBase, int>;
++                    return count?.Invoke(Method) ?? 0;
++                }
+                 if (actualHook?.IsApplied ?? false)
+                     return -1;
+ 
+@@ -51,6 +58,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+         public int MaxIndex {
+             get {
++                if (IOSManagedBackend) {
++                    Func<MethodBase, int> count = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.ILHookCount") as Func<MethodBase, int>;
++                    return count?.Invoke(Method) ?? 0;
++                }
+                 MethodDetourInfo info = DetourManager.GetDetourInfo(Method);
+                 using (info.WithLock())
+                     return info.ILHooks.Count();
+@@ -177,6 +188,16 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
+                 return;
+ 
++            if (IOSManagedBackend) {
++                Action<MethodBase, Delegate> remove = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.RemoveIL") as Action<MethodBase, Delegate>;
++                Action<MethodBase, Delegate, object> add = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddIL") as Action<MethodBase, Delegate, object>;
++                remove?.Invoke(Method, Manipulator);
++                actualHook = null;
++                if (IsApplied)
++                    add(Method, Manipulator, LegacyDetourContext.CreateLegacyDetourConfig(ID, Priority, Before, After, GlobalIndex, true));
++                return;
++            }
++
+             actualHook?.Dispose();
+             if (IsApplied) {
+                 actualHook = new ILHook(Method, Manipulator, LegacyDetourContext.CreateLegacyDetourConfig(ID, Priority, Before, After, GlobalIndex, true));
+diff --git a/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs b/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs
+index 2a508cfa..2b1e19d3 100644
+--- a/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs
++++ b/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs
+@@ -506,11 +506,25 @@ namespace Celeste.Mod {
+ 
+                 Assembly asm;
+                 string symPath = Path.ChangeExtension(path, "pdb");
++                byte[] iosWovenImage = null;
+                 using (Stream asmStream = File.OpenRead(path)) {
+                     using (Stream symStream = File.Exists(symPath) ? File.OpenRead(symPath) : null) {
+-                        asm = LoadFromStream(asmStream, symStream);
++                        Func<string, byte[], byte[]> iosWeave = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.WeaveAssembly") as Func<string, byte[], byte[]>;
++                        if (iosWeave != null) {
++                            using (MemoryStream source = new MemoryStream()) {
++                                asmStream.CopyTo(source);
++                                iosWovenImage = iosWeave(path, source.ToArray());
++                            }
++                            // Rewriting invalidates portable PDB offsets. Runtime
++                            // hook metadata is retained from the woven PE image.
++                            using (MemoryStream woven = new MemoryStream(iosWovenImage, false))
++                                asm = LoadFromStream(woven, null);
++                        } else
++                            asm = LoadFromStream(asmStream, symStream);
+                     }
+                 }
++                if (iosWovenImage != null && asm != null && AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.RegisterAssembly") is Action<Assembly, byte[]> iosRegister)
++                    iosRegister(asm, iosWovenImage);
+ 
+                 // Insert into dictionaries
+                 string asmName = asm.GetName().Name;
+diff --git a/Celeste.Mod.mm/Patches/AscendManager.cs b/Celeste.Mod.mm/Patches/AscendManager.cs
+index ed37b81f..efd2739c 100644
+--- a/Celeste.Mod.mm/Patches/AscendManager.cs
++++ b/Celeste.Mod.mm/Patches/AscendManager.cs
+@@ -43,9 +43,14 @@ namespace MonoMod {
+             MethodDefinition m_ShouldRestorePlayerX = method.DeclaringType.FindMethod("System.Boolean ShouldRestorePlayerX()");
+             MethodDefinition m_Entity_set_X = method.Module.GetType("Monocle.Entity").FindMethod("System.Void set_X(System.Single)").Resolve();
+ 
+-            FieldDefinition f_this = routine.DeclaringType.FindField("<>4__this");
+-            FieldDefinition f_player = routine.DeclaringType.Fields.FirstOrDefault(f => f.Name.StartsWith("<player>5__"));
+-            FieldDefinition f_from = routine.DeclaringType.Fields.FirstOrDefault(f => f.Name.StartsWith("<from>5__"));
++            // These are compiler-generated state-machine fields. Their names and
++            // slot numbers can change when Celeste is rebuilt from source, so
++            // identify the captured values by their stable types instead.
++            FieldDefinition f_this = FindSingleField(routine.DeclaringType, method.DeclaringType);
++            FieldDefinition f_player = FindSingleField(routine.DeclaringType, "Celeste.Player");
++            FieldDefinition f_from = FindSingleField(routine.DeclaringType, "Microsoft.Xna.Framework.Vector2");
++            if (f_this == null || f_player == null || f_from == null)
++                throw new InvalidOperationException("Could not resolve AscendManager.Routine captured state fields by type.");
+             FieldReference f_Vector2_X = MonoModRule.Modder.Module.ImportReference(t_Vector2.FindField("X"));
+ 
+             new ILContext(routine).Invoke(il => {
+@@ -78,5 +83,16 @@ namespace MonoMod {
+             });
+         }
+ 
++        private static FieldDefinition FindSingleField(TypeDefinition stateMachine, TypeDefinition expectedType) {
++            return FindSingleField(stateMachine, expectedType.FullName);
++        }
++
++        private static FieldDefinition FindSingleField(TypeDefinition stateMachine, string expectedType) {
++            FieldDefinition[] matches = stateMachine.Fields
++                .Where(field => field.FieldType.FullName == expectedType)
++                .ToArray();
++            return matches.Length == 1 ? matches[0] : null;
++        }
++
+     }
+ }
+diff --git a/Celeste.Mod.mm/Patches/EventTrigger.cs b/Celeste.Mod.mm/Patches/EventTrigger.cs
+index 63909b40..52a3d04e 100644
+--- a/Celeste.Mod.mm/Patches/EventTrigger.cs
++++ b/Celeste.Mod.mm/Patches/EventTrigger.cs
+@@ -1,6 +1,7 @@
+-﻿#pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
++#pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
+ 
+ using System;
++using System.Linq;
+ using Celeste.Mod;
+ using Microsoft.Xna.Framework;
+ using Monocle;
+@@ -79,98 +80,93 @@ namespace MonoMod {
+     static partial class MonoModRules {
+ 
+         public static void PatchEventTriggerOnEnter(MethodDefinition method, CustomAttribute attrib) {
+-            // We also need to do special work in the cctor.
+             MethodDefinition m_cctor = method.DeclaringType.FindMethod(".cctor");
+-
+             MethodDefinition m_TriggerCustomEvent = method.DeclaringType.FindMethod("System.Boolean TriggerCustomEvent(Celeste.EventTrigger,Celeste.Player,System.String)");
+-
+             FieldDefinition f_Event = method.DeclaringType.FindField("Event");
+-
+             FieldDefinition f_LoadStrings = method.DeclaringType.FindField("_LoadStrings");
+ 
+-            Mono.Collections.Generic.Collection<Instruction> cctor_instrs = m_cctor.Body.Instructions;
+-            ILProcessor cctor_il = m_cctor.Body.GetILProcessor();
+-
+-            // Remove cctor ret for simplicity. Re-add later.
+-            cctor_instrs.RemoveAt(cctor_instrs.Count - 1);
+-
+             TypeDefinition td_LoadStrings = f_LoadStrings.FieldType.Resolve();
+             MethodReference m_LoadStrings_Add = MonoModRule.Modder.Module.ImportReference(td_LoadStrings.FindMethod("Add"));
+             m_LoadStrings_Add.DeclaringType = f_LoadStrings.FieldType;
+             MethodReference m_LoadStrings_ctor = MonoModRule.Modder.Module.ImportReference(td_LoadStrings.FindMethod("System.Void .ctor()"));
+             m_LoadStrings_ctor.DeclaringType = f_LoadStrings.FieldType;
+-            cctor_il.Emit(OpCodes.Newobj, m_LoadStrings_ctor);
+-
+-            bool eventHandlerInjectionPointFound = false;
+-            bool loadStringFound = false;
+ 
+             Mono.Collections.Generic.Collection<Instruction> instrs = method.Body.Instructions;
+             ILProcessor il = method.Body.GetILProcessor();
+-            for (int instri = 0; instri < instrs.Count; instri++) {
+-                Instruction instr = instrs[instri];
+-
+-                /* We expect something similar enough to the following:
+-                ldfld     string Celeste.EventTrigger::Event // We're here
+-                stloc*
+-                ldloc*
+-                call      uint32 '<PrivateImplementationDetails>'::ComputeStringHash(string)
+-
+-                Note that MonoMod requires the full type names (System.UInt32 instead of uint32) and skips escaping 's
+-                */
+-
+-                if (instri > 0 &&
+-                    instri < instrs.Count - 3 &&
+-                    instr.MatchLdfld("Celeste.EventTrigger", "Event") &&
+-                    instrs[instri + 1].MatchStloc(out int _) &&
+-                    instrs[instri + 2].MatchLdloc(out int _) &&
+-                    instrs[instri + 3].MatchCall("<PrivateImplementationDetails>", "ComputeStringHash")
+-                ) {
+-                    // Insert a call to our own event handler here.
+-                    // If it returns true, return.
+-
+-                    // Load "this" onto stack
+-                    instrs.Insert(instri++, il.Create(OpCodes.Ldarg_0));
+-
+-                    //Load Player parameter onto stack
+-                    instrs.Insert(instri++, il.Create(OpCodes.Ldarg_1));
+-
+-                    //Load Event field onto stack again
+-                    instrs.Insert(instri++, il.Create(OpCodes.Ldarg_0));
+-                    instrs.Insert(instri++, il.Create(OpCodes.Ldfld, f_Event));
+-
+-                    // Call our static custom event handler.
+-                    instrs.Insert(instri++, il.Create(OpCodes.Call, m_TriggerCustomEvent));
+-
+-                    // If we returned false, branch to ldfld. We still have the event ID on stack.
+-                    // This basically translates to if (result) { pop; ldstr ""; }; ldfld ...
+-                    instrs.Insert(instri, il.Create(OpCodes.Brfalse_S, instrs[instri]));
+-                    instri++;
+-                    // Otherwise, pop the event and return to skip any original event handler.
+-                    instrs.Insert(instri++, il.Create(OpCodes.Pop));
+-                    instrs.Insert(instri++, il.Create(OpCodes.Ret));
+-
+-                    eventHandlerInjectionPointFound = true;
++            Instruction eventLookup = null;
++            HashSet<string> loadStrings = new HashSet<string>();
++
++            // Compiler versions lower string switches as hash switches,
++            // equality chains, or length/character dispatch. The first read
++            // of Event is common to all of them; collect only equality-case
++            // literals so the built-in event whitelist remains precise.
++            for (int i = 0; i < instrs.Count; i++) {
++                Instruction instr = instrs[i];
++                if (eventLookup == null && instr.OpCode == OpCodes.Ldfld &&
++                    instr.Operand is FieldReference field &&
++                    field.DeclaringType.FullName == "Celeste.EventTrigger" && field.Name == "Event") {
++                    eventLookup = instr;
+                 }
+ 
+-                if (instr.OpCode == OpCodes.Ldstr) {
+-                    cctor_il.Emit(OpCodes.Dup);
+-                    cctor_il.Emit(OpCodes.Ldstr, instr.Operand);
+-                    cctor_il.Emit(OpCodes.Callvirt, m_LoadStrings_Add);
+-                    cctor_il.Emit(OpCodes.Pop); // HashSet.Add returns a bool.
+-
+-                    loadStringFound = true;
++                if (instr.OpCode == OpCodes.Ldstr && instr.Operand is string value &&
++                    i + 1 < instrs.Count &&
++                    instrs[i + 1].Operand is MethodReference called &&
++                    called.DeclaringType.FullName == "System.String" &&
++                    (called.Name == "op_Equality" || called.Name == "Equals")) {
++                    loadStrings.Add(value);
+                 }
+             }
+ 
+-            if (!eventHandlerInjectionPointFound) {
+-                throw new Exception("Event handler injection point not found in " + method.FullName + "!");
++            if (eventLookup == null)
++                throw new Exception("Event field lookup not found in " + method.FullName + "!");
++            if (loadStrings.Count == 0)
++                throw new Exception("Built-in event string comparisons not found in " + method.FullName + "!");
++
++            // A handled custom event returns early; all built-in IDs continue
++            // into the original dispatch unchanged.
++            il.InsertBefore(eventLookup, il.Create(OpCodes.Ldarg_0));
++            il.InsertBefore(eventLookup, il.Create(OpCodes.Ldarg_1));
++            il.InsertBefore(eventLookup, il.Create(OpCodes.Ldarg_0));
++            il.InsertBefore(eventLookup, il.Create(OpCodes.Ldfld, f_Event));
++            il.InsertBefore(eventLookup, il.Create(OpCodes.Call, m_TriggerCustomEvent));
++            il.InsertBefore(eventLookup, il.Create(OpCodes.Brfalse, eventLookup));
++            il.InsertBefore(eventLookup, il.Create(OpCodes.Ret));
++
++            // Route every existing static-constructor exit through a shared
++            // initializer tail. Create a constructor where the compiler did
++            // not emit one.
++            bool createdCctor = m_cctor == null;
++            if (createdCctor) {
++                m_cctor = new MethodDefinition(".cctor",
++                    MethodAttributes.Private | MethodAttributes.Static | MethodAttributes.HideBySig |
++                    MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
++                    method.Module.TypeSystem.Void);
++                method.DeclaringType.Methods.Add(m_cctor);
++                m_cctor.Body = new Mono.Cecil.Cil.MethodBody(m_cctor);
+             }
+-            if (!loadStringFound) {
+-                throw new Exception("ldstr not found in " + method.FullName + "!");
++
++            ILProcessor cctorIL = m_cctor.Body.GetILProcessor();
++            if (createdCctor)
++                cctorIL.Append(cctorIL.Create(OpCodes.Ret));
++            Instruction[] oldReturns = m_cctor.Body.Instructions.Where(instruction => instruction.OpCode == OpCodes.Ret).ToArray();
++            if (oldReturns.Length == 0)
++                throw new Exception("Static constructor has no return instruction on " + method.DeclaringType.FullName + "!");
++
++            Instruction initStart = cctorIL.Create(OpCodes.Newobj, m_LoadStrings_ctor);
++            foreach (Instruction ret in oldReturns) {
++                ret.OpCode = OpCodes.Br;
++                ret.Operand = initStart;
+             }
+ 
+-            cctor_il.Emit(OpCodes.Stsfld, f_LoadStrings);
+-            cctor_il.Emit(OpCodes.Ret);
++            cctorIL.Append(initStart);
++            cctorIL.Append(cctorIL.Create(OpCodes.Stsfld, f_LoadStrings));
++            foreach (string value in loadStrings) {
++                cctorIL.Append(cctorIL.Create(OpCodes.Ldsfld, f_LoadStrings));
++                cctorIL.Append(cctorIL.Create(OpCodes.Ldstr, value));
++                cctorIL.Append(cctorIL.Create(OpCodes.Callvirt, m_LoadStrings_Add));
++                cctorIL.Append(cctorIL.Create(OpCodes.Pop));
++            }
++            cctorIL.Append(cctorIL.Create(OpCodes.Ret));
+         }
+ 
+     }
+diff --git a/Celeste.Mod.mm/Patches/Level.cs b/Celeste.Mod.mm/Patches/Level.cs
+index 7c82d5f1..da1e78af 100644
+--- a/Celeste.Mod.mm/Patches/Level.cs
++++ b/Celeste.Mod.mm/Patches/Level.cs
+@@ -959,8 +959,7 @@ namespace MonoMod {
+                 cursor.GotoNext(
+                     instr => instr.MatchLdfld("Celeste.EntityData", "Name"), // cursor.Next (get entity name)
+                     instr => instr.MatchStloc(out nameLoc), // cursor.Next.Next (save entity name)
+-                    instr => instr.MatchLdloc(out _),
+-                    instr => instr.MatchCall("<PrivateImplementationDetails>", "System.UInt32 ComputeStringHash(System.String)"));
++                    instr => instr.MatchLdloc(out _)); // string-switch lowering varies by compiler; this prefix is stable
+                 
+                 // + _currentEntityData = entityData;
+                 // + _currentEntityId = entityId;
+diff --git a/Celeste.Mod.mm/Patches/Player.cs b/Celeste.Mod.mm/Patches/Player.cs
+index 88c74c26..6e371243 100644
+--- a/Celeste.Mod.mm/Patches/Player.cs
++++ b/Celeste.Mod.mm/Patches/Player.cs
+@@ -9,6 +9,7 @@ using MonoMod;
+ using System;
+ using System.Collections;
+ using System.Collections.Generic;
++using System.Linq;
+ using System.Runtime.CompilerServices;
+ using Mono.Cecil;
+ using Mono.Cecil.Cil;
+@@ -628,7 +629,12 @@ namespace MonoMod {
+             });
+ 
+             // then hook another method given the context available.
+-            method = method.DeclaringType.FindMethod("<.ctor>b__280_1");
++            method = method.DeclaringType.Methods.FirstOrDefault(candidate =>
++                candidate.Name.StartsWith("<.ctor>b__") && candidate.Name.EndsWith("_1") &&
++                candidate.ReturnType.FullName == "System.Void" && candidate.Parameters.Count == 1 &&
++                candidate.Parameters[0].ParameterType.FullName == "System.String");
++            if (method == null)
++                throw new InvalidOperationException("Could not find the Player constructor footstep callback to patch.");
+ 
+             new ILContext(method).Invoke(il => {
+                 ILCursor cursor = new ILCursor(il);

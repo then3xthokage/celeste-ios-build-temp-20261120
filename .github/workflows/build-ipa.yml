@@ -14,11 +14,17 @@ jobs:
   build:
     if: github.ref == 'refs/heads/celeste-ios-build'
     runs-on: macos-15
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v5
         with:
           submodules: true
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            8.0.428
+            9.0.x
 
       - name: Check required private secrets
         shell: bash
@@ -154,7 +160,7 @@ jobs:
           path: |
             ~/.nuget/packages
             ~/.dotnet/tools
-          key: celeste-dotnet-${{ runner.os }}-${{ steps.input-paths.outputs.game_hash }}-${{ hashFiles('celestemeow/*.csproj', 'celestemeow.sln', 'global.json') }}-ilspy-8.0.0.7246-preview3
+          key: celeste-dotnet-${{ runner.os }}-${{ steps.input-paths.outputs.game_hash }}-${{ hashFiles('celestemeow/*.csproj', 'celestemeow.sln', 'global.json', 'tools/IOSHookWeaver/*.cs', 'tools/IOSNativeImportPatcher/*.cs', 'patches/Everest-ios.patch') }}-ilspy-8.0.0.7246-preview3
 
       - name: Install .NET iOS workload when needed
         shell: bash
@@ -299,6 +305,9 @@ jobs:
             "$GITHUB_WORKSPACE/_celeste_game" \
             "$GITHUB_WORKSPACE/_celeste_decomp" \
             "$GITHUB_WORKSPACE/celeste" \
+            "$GITHUB_WORKSPACE/everest-runtime" \
+            "$GITHUB_WORKSPACE/Everest/Celeste.Mod.mm/bin" \
+            "$GITHUB_WORKSPACE/Everest/Celeste.Mod.mm/obj" \
             "$GITHUB_WORKSPACE/celestemeow/Content" \
             "$GITHUB_WORKSPACE/celestemeow/bin" \
             "$GITHUB_WORKSPACE/celestemeow/obj"

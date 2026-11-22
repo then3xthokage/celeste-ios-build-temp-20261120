@@ -5,3 +5,6 @@
 	path = FNA
 	url = https://github.com/FNA-XNA/FNA
 	branch = 21.03.05
+[submodule "everest"]
+	path = Everest
+	url = https://github.com/EverestAPI/Everest.git

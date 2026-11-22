@@ -1,13 +1,21 @@
 ﻿using System;
 using System.Reflection;
 using System.IO;
+using System.Runtime.InteropServices;
 using SDL2;
+using UIKit;
 
 namespace celestemeow
 {
     public class Application
     {
         static StreamWriter startupWriter;
+        static UIWindow modManagerWindow;
+        static ModManagerViewController modManagerController;
+        static bool celesteIsRunning;
+
+        [DllImport("__Internal", EntryPoint = "SDL_iPhoneSetEventPump", CallingConvention = CallingConvention.Cdecl)]
+        static extern void SetSdlEventPump(int enabled);
 
         static void InitializeStartupDiagnostics()
         {
@@ -88,9 +96,14 @@ namespace celestemeow
             TraceStartup("SDL main callback entered; argc=" + argc);
             try
             {
-                TraceStartup("calling RealMain");
-                RealMain(realArgs);
-                TraceStartup("RealMain returned");
+                TraceStartup("showing pre-boot mod manager");
+                modManagerController = new ModManagerViewController(StartCeleste);
+                modManagerWindow = new UIWindow(UIScreen.MainScreen.Bounds)
+                {
+                    RootViewController = modManagerController,
+                    WindowLevel = UIWindowLevel.Normal + 2
+                };
+                modManagerWindow.MakeKeyAndVisible();
                 return 0;
             }
             catch (Exception exception)
@@ -98,6 +111,38 @@ namespace celestemeow
                 ReportStartupException(exception);
                 ShowStartupException(exception);
                 return -1;
+            }
+        }
+
+        static void StartCeleste()
+        {
+            if (celesteIsRunning)
+                return;
+
+            celesteIsRunning = true;
+            Exception launchException = null;
+            try
+            {
+                TraceStartup("enabling SDL event pump and starting game");
+                modManagerWindow.Hidden = true;
+                SetSdlEventPump(1);
+                RealMain(realArgs);
+                TraceStartup("Celeste returned to mod manager");
+            }
+            catch (Exception exception)
+            {
+                ReportStartupException(exception);
+                launchException = exception;
+            }
+            finally
+            {
+                try { SetSdlEventPump(0); } catch { }
+                modManagerWindow.Hidden = false;
+                modManagerWindow.MakeKeyAndVisible();
+                modManagerController?.GameDidReturn();
+                if (launchException != null)
+                    modManagerController?.ShowProblem(launchException);
+                celesteIsRunning = false;
             }
         }
 
@@ -143,6 +188,12 @@ namespace celestemeow
 #endif
         {
             TraceStartup("RealMain entered");
+            IOSHookRuntime.Initialize();
+            string gameAssemblyPath = typeof(Celeste.Celeste).Assembly.Location;
+            if (string.IsNullOrEmpty(gameAssemblyPath))
+                gameAssemblyPath = Path.Combine(AppContext.BaseDirectory, "Celeste.dll");
+            IOSHookRuntime.ConfigureGameAssembly(gameAssemblyPath);
+            AppDomain.CurrentDomain.SetData("Celeste.IOSHookRuntime.EverestDataPath", IOSModLibrary.DataPath);
 
             // thanks to pixel#0772 on the celeste discord server for this <3
             //Type MeWhenIStealCodeFromAScreenshotInTheCelesteDiscordServer = typeof(UIWindow).GetType();

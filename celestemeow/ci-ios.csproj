@@ -16,17 +16,31 @@
     <BuildIpa>true</BuildIpa>
     <ValidateXcodeVersion>false</ValidateXcodeVersion>
     <MtouchLink>SdkOnly</MtouchLink>
+    <UseInterpreter>true</UseInterpreter>
     <EnableSGenConc>true</EnableSGenConc>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../FNA/FNA.Core.csproj" />
+    <ProjectReference Include="../tools/IOSHookWeaver/IOSHookWeaver.csproj" />
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+    <PackageReference Include="YamlDotNet" Version="16.1.3" />
+    <PackageReference Include="KeraLua" Version="1.4.7" />
+    <Reference Include="FNA">
+      <HintPath>../celeste/FNA.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Celeste">
       <HintPath>../celeste/Celeste.dll</HintPath>
     </Reference>
+    <Reference Include="Celeste.Mod.mm">
+      <HintPath>../EverestRuntime/Celeste.Mod.mm.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <ImageAsset Include="Assets.xcassets/**/*" />
     <BundleResource Include="Content/**/*" TargetPath="Content/%(RecursiveDir)%(Filename)%(Extension)" />
+    <BundleResource Include="../celeste/FNA.dll" TargetPath="FNA.dll" />
+    <BundleResource Include="../EverestRuntime/*.dll" TargetPath="%(Filename)%(Extension)" />
     <BundleResource Include="celeste/mscorlib.dll" />
     <BundleResource Include="celeste/Celeste.Content.dll" />
     <BundleResource Include="celeste/Celeste.dll.config" />

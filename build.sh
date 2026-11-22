@@ -235,6 +235,7 @@ fi
 
 info "cloning submodules..."
 update_submodules 0 # not doing --recursive because FNA's submodules are broken and will fail to clone
+if ! git -C "$script_dir/Everest" submodule update --init --recursive; then error "failed to initialize Everest build dependencies"; exit 1; fi
 
 cd "$script_dir/FNA" || cd_fail
 clone_repo https://github.com/FNA-XNA/FAudio lib/FAudio --branch 21.03.05 --single-branch --recursive # --single-branch makes cloning faster
@@ -284,6 +285,11 @@ apply_patch() {
 	fi
 	if [ "$2" == "1" ]; then mv "$script_dir/.git-tmp" "$script_dir/.git"; fi
 }
+
+info "applying the iOS Everest integration patch"
+cd "$script_dir/Everest" || cd_fail
+apply_patch "$script_dir/patches/Everest-ios.patch"
+cd "$script_dir" || cd_fail
 
 info "applying patches to FNA"
 apply_patch "$script_dir/patches/FNA.patch"
@@ -485,6 +491,8 @@ if start >= 0 and end > start:
     settings.write_text(source[:start] + source[end:])
 PY
 
+info "enabled mod archives will be loaded through Everest"
+
 info "building the patched game"
 if ! dotnet publish --configuration Release; then error "failed to build the game!"; exit 1; fi
 
@@ -501,6 +509,115 @@ copy_game_files "$script_dir/_celeste_game/mscorlib.dll" "$script_dir/celeste"
 copy_game_files "$script_dir/_celeste_game/Celeste.Content.dll" "$script_dir/celeste"
 copy_game_files "$script_dir/_celeste_game/Content" "$script_dir/celestemeow/"
 copy_game_files "$script_dir/misc/Celeste.dll.config" "$script_dir/celeste/"
+
+info "building Everest against this Celeste and FNA version"
+everest_runtime="$script_dir/everest-runtime"
+rm -rf "$everest_runtime"
+mkdir -p "$everest_runtime"
+cd "$script_dir/Everest/external/MonoMod" || cd_fail
+if ! dotnet publish "$script_dir/Everest/Celeste.Mod.mm/Celeste.Mod.mm.csproj" \
+	--configuration Release \
+	--framework net8.0 \
+	--verbosity quiet \
+	-p:EverestCelesteReference="$script_dir/celeste/Celeste.dll" \
+	-p:EverestFNAReference="$celeste_path/FNA.dll" \
+	-p:PublishDir="$everest_runtime/"; then
+	error "failed to build Everest runtime"
+	exit 1
+fi
+cd "$script_dir" || cd_fail
+
+for required in Celeste.Mod.mm.dll MonoMod.Patcher.dll MonoMod.RuntimeDetour.HookGen.dll MonoMod.RuntimeDetour.dll MonoMod.Utils.dll Mono.Cecil.dll NLua.dll KeraLua.dll; do
+	if ! [ -s "$everest_runtime/$required" ]; then
+		error "Everest runtime is missing required assembly $required"
+		exit 1
+	fi
+done
+
+export MONOMOD_DEPDIRS="$everest_runtime:$script_dir/Everest/lib-ext:$celeste_path:$script_dir/celeste"
+export MONOMOD_DEPENDENCY_MISSING_THROW=0
+
+info "applying Everest patches and generating managed hook endpoints"
+if ! dotnet "$everest_runtime/MonoMod.Patcher.dll" \
+	"$script_dir/celeste/Celeste.dll" \
+	"$script_dir/Everest/lib-ext" \
+	"$everest_runtime/Celeste.Mod.mm.dll" \
+	"$script_dir/celeste/Celeste.everest.dll"; then
+	error "Everest failed to patch Celeste"
+	exit 1
+fi
+if ! dotnet "$everest_runtime/MonoMod.Patcher.dll" \
+	"$celeste_path/FNA.dll" \
+	"$script_dir/Everest/lib-ext" \
+	"$everest_runtime/Celeste.Mod.mm.dll" \
+	"$script_dir/celeste/FNA.everest.dll"; then
+	error "Everest failed to patch FNA"
+	exit 1
+fi
+if ! dotnet "$everest_runtime/MonoMod.RuntimeDetour.HookGen.dll" --private \
+	"$script_dir/celeste/Celeste.everest.dll" \
+	"$script_dir/celeste/MMHOOK_Celeste.dll"; then
+	error "Everest failed to generate Celeste hook endpoints"
+	exit 1
+fi
+if ! dotnet "$everest_runtime/MonoMod.Patcher.dll" \
+	"$script_dir/celeste/MMHOOK_Celeste.dll" \
+	"$script_dir/Everest/lib-ext" \
+	"$everest_runtime/Celeste.Mod.mm.dll" \
+	"$script_dir/celeste/MMHOOK_Celeste.relinked.dll"; then
+	error "Everest failed to route generated hooks through its compatibility layer"
+	exit 1
+fi
+if ! mv "$script_dir/celeste/Celeste.everest.dll" "$script_dir/celeste/Celeste.dll" || \
+	! mv "$script_dir/celeste/FNA.everest.dll" "$script_dir/celeste/FNA.everest.input.dll" || \
+	! mv "$script_dir/celeste/MMHOOK_Celeste.relinked.dll" "$script_dir/celeste/MMHOOK_Celeste.dll"; then
+	error "failed to install Everest patched assemblies"
+	exit 1
+fi
+
+info "linking FNA native imports into the iOS application"
+if ! dotnet run --project "$script_dir/tools/IOSNativeImportPatcher/IOSNativeImportPatcher.csproj" \
+	--configuration Release -- "$script_dir/celeste/FNA.everest.input.dll" "$script_dir/celeste/FNA.dll"; then
+	error "failed to rewrite FNA native imports for iOS"
+	exit 1
+fi
+rm -f "$script_dir/celeste/FNA.everest.input.dll"
+
+info "weaving Celeste, FNA, Everest, and hook endpoint assemblies for iOS"
+for assembly in "$script_dir/celeste/Celeste.dll" "$script_dir/celeste/FNA.dll"; do
+	if ! dotnet run --project "$script_dir/tools/IOSHookWeaver/IOSHookWeaver.csproj" \
+		--configuration Release -- "$assembly" "$assembly.woven"; then
+		error "failed to weave hook gates in $(basename "$assembly")"
+		exit 1
+	fi
+	if ! mv "$assembly.woven" "$assembly"; then
+		error "failed to install woven assembly $(basename "$assembly")"
+		exit 1
+	fi
+done
+cp "$script_dir/celeste/MMHOOK_Celeste.dll" "$everest_runtime/MMHOOK_Celeste.dll"
+for assembly in "$everest_runtime"/*.dll; do
+	runtime_assembly=$(basename "$assembly")
+	case "$runtime_assembly" in
+		Mono.Cecil*.dll|MonoMod.Utils.dll)
+			# Mod assemblies and Celeste are woven below/above. Mono.Cecil and
+			# MonoMod.Utils are execution infrastructure for DMDType=cecil; weaving
+			# these libraries breaks their reflection-loaded generated methods.
+			info "preserving portable code-generation dependency $runtime_assembly"
+			continue
+			;;
+	esac
+	if ! dotnet run --project "$script_dir/tools/IOSHookWeaver/IOSHookWeaver.csproj" \
+		--configuration Release -- "$assembly" "$assembly.woven"; then
+		error "failed to weave hook gates in runtime assembly $(basename "$assembly")"
+		exit 1
+	fi
+	if ! mv "$assembly.woven" "$assembly"; then
+		error "failed to install woven runtime assembly $(basename "$assembly")"
+		exit 1
+	fi
+done
+
 mkdir -p "$script_dir/celestemeow/celeste"
 copy_game_files "$script_dir/celeste/mscorlib.dll" "$script_dir/celestemeow/celeste/"
 copy_game_files "$script_dir/celeste/Celeste.Content.dll" "$script_dir/celestemeow/celeste/"

@@ -7,4 +7,9 @@ celeste/
 /celestemeow/lib*.a
 /celestemeow/*.dll
 /celestemeow/*.exe
+/work/
+/everest-runtime/
+/tools/**/bin/
+/tools/**/obj/
+/.DS_Store
 /*.ipa
