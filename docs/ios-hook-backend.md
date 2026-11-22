@@ -136,9 +136,10 @@ Verification record (November 22, 2026):
   the two Secret Santa packs and Crossover. The package audit checked catalog
   size, xxHash, and a root Everest manifest for each package.
 - The current code-assembly pass parsed 89 declared mod DLLs with no manifest
-  failures or assembly identity conflicts. It wove 70,681 methods and had zero
-  module failures. Eight native imports were rewritten to iOS linked symbols;
-  the one Windows-only `shlwapi!ColorHLSToRGB` import became a managed call.
+  failures or assembly identity conflicts. It wove 72,898 methods with zero
+  module failures and zero unhookable method shapes. Eight native imports were
+  rewritten to iOS linked symbols; the one Windows-only
+  `shlwapi!ColorHLSToRGB` import became a managed call.
   That conversion matched the Windows export for every one of the 241³ legal
   H/L/S input tuples.
 - In the current package-level rescan, every managed mod assembly completed
