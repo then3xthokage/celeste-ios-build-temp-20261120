@@ -224,7 +224,10 @@ jobs:
             curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
             bash "$RUNNER_TEMP/dotnet-install.sh" --runtime dotnet --version 6.0.36 --architecture arm64 --install-dir "$DOTNET_ROOT"
           fi
-          dotnet --list-runtimes
+          if [ ! -d "$DOTNET_ROOT/shared/Microsoft.NETCore.App/6.0.36" ]; then
+            echo 'The .NET 6 runtime required by the compatibility tools was not installed.' >&2
+            exit 1
+          fi
           xcodebuild -version
 
       - name: Verify woven hooks on the iOS interpreter
