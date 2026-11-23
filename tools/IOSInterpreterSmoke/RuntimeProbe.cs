@@ -100,6 +100,7 @@ public static class RuntimeProbe
         ConstructorInfo everestConstructor = everestConstructorTargetType.GetConstructor(new[] { typeof(bool), typeof(int) })
             ?? throw new MissingMethodException(everestConstructorTargetType.FullName, ".ctor(Boolean, Int32)");
         Type everestConstructorHooksType = fixture.GetType("ProbeEverestStyleConstructorHooks", throwOnError: true);
+        everestConstructorHooksType.GetField("Calls").SetValue(null, 0);
         ConstructorInfo legacyHookConstructor = legacyHookType.GetConstructor(new[] { typeof(MethodBase), typeof(MethodInfo) })
             ?? throw new MissingMethodException(legacyHookType.FullName, ".ctor(MethodBase, MethodInfo)");
         MethodInfo onConstructor = everestConstructorHooksType.GetMethod("OnConstructor", BindingFlags.Public | BindingFlags.Static)
