@@ -2,6 +2,7 @@
 using System.Reflection;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -106,7 +107,9 @@ namespace celestemeow
         [DllImport("__Internal", EntryPoint = "SDL_iPhoneSetEventPump", CallingConvention = CallingConvention.Cdecl)]
         static extern void SetSdlEventPump(int enabled);
 
-        static void InitializeStartupDiagnostics()
+#pragma warning disable CA2255
+        [ModuleInitializer]
+        internal static void InitializeStartupDiagnostics()
         {
             try
             {
@@ -130,8 +133,9 @@ namespace celestemeow
                 Console.Error.WriteLine("Could not initialize startup trace: " + exception);
             }
 
-            TraceStartup("managed Main entered");
+            TraceStartup("managed module initializer entered");
         }
+#pragma warning restore CA2255
 
         static void HandleUnhandledException(object sender, UnhandledExceptionEventArgs eventArgs)
         {
@@ -182,7 +186,6 @@ namespace celestemeow
         static void Main(string[] args)
 #if __IOS__ || __TVOS__
         {
-            InitializeStartupDiagnostics();
             try
             {
                 /*

@@ -43,6 +43,17 @@ public static class ProbeTarget
     public static int Constant() => 5;
 }
 
+public static unsafe class ProbeManagedCalli
+{
+    public static int Invoke(int value)
+    {
+        delegate* managed<int, int> target = &AddSeventeen;
+        return target(value);
+    }
+
+    private static int AddSeventeen(int value) => value + 17;
+}
+
 public ref struct ProbeRefLikeConstructorTarget
 {
     private int value;

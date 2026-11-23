@@ -29,8 +29,6 @@ public static class RuntimeProbe
         VerifyCecilGeneratedMethod();
         Mark("unsafe IL opcode probe");
         VerifyUnsafeILInstructions();
-        Mark("managed function pointer calli probe");
-        VerifyManagedFunctionPointerCalli();
 
         Mark("read and weave hook fixture");
         using Stream fixtureResource = Assembly.GetExecutingAssembly().GetManifestResourceStream("ProbeFixture.dll");
@@ -46,6 +44,11 @@ public static class RuntimeProbe
 
         Assembly fixture = Assembly.Load(woven);
         IOSILHookRuntime.RegisterAssemblySnapshot(fixture, woven);
+
+        Mark("woven managed function pointer probe");
+        Type calliType = fixture.GetType("ProbeManagedCalli", throwOnError: true);
+        AssertEqual("Woven managed calli on iOS interpreter", 42,
+            calliType.GetMethod("Invoke").Invoke(null, new object[] { 25 }));
 
         Mark("register module initializer hook");
         int moduleInitializerToken;
@@ -398,22 +401,6 @@ public static class RuntimeProbe
         il.Emit(OpCodes.Ret);
 
         AssertEqual("MonoMod Cecil localloc/cpblk on iOS interpreter", 0x12345678,
-            dmd.Generate().Invoke(null, null));
-    }
-
-    private static int CalliTarget(int value) => value + 17;
-
-    private static void VerifyManagedFunctionPointerCalli()
-    {
-        Switches.SetSwitchValue("DMDType", "cecil");
-        using DynamicMethodDefinition dmd = new DynamicMethodDefinition("ios_interpreter_managed_calli_smoke", typeof(int), Type.EmptyTypes);
-        ILGenerator il = dmd.GetILGenerator();
-        il.Emit(OpCodes.Ldc_I4, 25);
-        il.Emit(OpCodes.Ldftn, typeof(RuntimeProbe).GetMethod(nameof(CalliTarget), BindingFlags.NonPublic | BindingFlags.Static));
-        il.EmitCalli(OpCodes.Calli, CallingConventions.Standard, typeof(int), new[] { typeof(int) }, null);
-        il.Emit(OpCodes.Ret);
-
-        AssertEqual("MonoMod Cecil managed calli on iOS interpreter", 42,
             dmd.Generate().Invoke(null, null));
     }
 
