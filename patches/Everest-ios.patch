@@ -187,43 +187,44 @@ index ec688e99..5dac4177 100755
  
          public CompressedHttpClient() : base(handler, disposeHandler: false) {
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
-index b82f6efc..daa32d53 100644
+index b82f6efc..d52d443b 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
-@@ -33,9 +33,19 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -33,9 +33,20 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
  
          private Hook actualHook;
 -
 -        public bool IsValid { get; private set; } = true;
 -        public bool IsApplied { get; private set; }
 +        private bool _iosHook;
++        private LegacyHook _iosHookOwner;
 +        private bool _iosValid = true;
 +        private bool _iosApplied;
 +        private bool _nativeValid = true;
 +        private bool _nativeApplied;
 +        private LegacyDetourConfig _iosConfig;
 +
-+        public bool IsValid { get => _iosHook ? _iosValid : _nativeValid; private set { if (_iosHook) _iosValid = value; else _nativeValid = value; } }
-+        public bool IsApplied { get => _iosHook ? _iosApplied : _nativeApplied; private set { if (_iosHook) _iosApplied = value; else _nativeApplied = value; } }
++        public bool IsValid { get => _iosHookOwner != null ? _iosHookOwner.IsValid : (_iosHook ? _iosValid : _nativeValid); private set { if (_iosHookOwner != null) return; if (_iosHook) _iosValid = value; else _nativeValid = value; } }
++        public bool IsApplied { get => _iosHookOwner != null ? _iosHookOwner.IsApplied : (_iosHook ? _iosApplied : _nativeApplied); private set { if (_iosHookOwner != null) return; if (_iosHook) _iosApplied = value; else _nativeApplied = value; } }
          private bool IsTop {
              get {
 +                if (_iosHook) {
 +                    Func<MethodBase, object, int> index = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.DetourIndex") as Func<MethodBase, object, int>;
-+                    return index?.Invoke(Method, this) == 0;
++                    return index?.Invoke(Method, _iosHookOwner ?? (object) this) == 0;
 +                }
                  MethodDetourInfo info = DetourManager.GetDetourInfo(Method);
                  using (info.WithLock())
-@@ -47,4 +57,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -47,4 +58,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          public int Index {
              get {
 +                if (_iosHook) {
-+                    if (_iosApplied) return -1;
++                    if (IsApplied) return -1;
 +                    Func<MethodBase, object, int> index = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.DetourIndex") as Func<MethodBase, object, int>;
-+                    return index?.Invoke(Method, this) ?? 0;
++                    return index?.Invoke(Method, _iosHookOwner ?? (object) this) ?? 0;
 +                }
                  if (actualHook?.IsApplied ?? false)
                      return -1;
-@@ -58,4 +73,8 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -58,4 +74,8 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          public int MaxIndex {
              get {
 +                if (_iosHook) {
@@ -232,31 +233,31 @@ index b82f6efc..daa32d53 100644
 +                }
                  MethodDetourInfo info = DetourManager.GetDetourInfo(Method);
                  using (info.WithLock())
-@@ -74,4 +93,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -74,4 +94,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                      return;
                  _Priority = value;
 +                if (_iosHook) _iosConfig.Priority = value;
                  _Refresh();
              }
-@@ -87,4 +107,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -87,4 +108,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                      return;
                  _ID = value;
 +                if (_iosHook) _iosConfig.ID = value;
                  _Refresh();
              }
-@@ -101,4 +122,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -101,4 +123,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                          foreach (string id in value)
                              _Before.Add(id);
 +                    if (_iosHook) _iosConfig.Before = _Before.ToArray();
                      _Refresh();
                  }
-@@ -117,4 +139,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -117,4 +140,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                          foreach (string id in value)
                              _After.Add(id);
 +                    if (_iosHook) _iosConfig.After = _After.ToArray();
                      _Refresh();
                  }
-@@ -131,5 +154,6 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -131,5 +155,6 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
  
          public LegacyDetour(MethodBase from, MethodBase to, LegacyDetourConfig config) {
 -            from = from.GetIdentifiable();
@@ -264,14 +265,14 @@ index b82f6efc..daa32d53 100644
 +                from = from.GetIdentifiable();
              if (from.Equals(to))
                  throw new ArgumentException("Cannot LegacyDetour a method to itself!");
-@@ -137,5 +161,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -137,5 +162,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
              Method = from;
              Target = to;
 -            TargetReal = PlatformTriple.Current.GetRealDetourTarget(from, to);
 +            TargetReal = to;
  
              _GlobalIndex = AcquireGlobalIndex();
-@@ -148,4 +172,16 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -148,4 +173,16 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  _After.AddRange(config.After);
  
 +            // On iOS the static hook gate is the only detour backend. Avoid
@@ -288,9 +289,37 @@ index b82f6efc..daa32d53 100644
 +
              // Generate a "chained trampoline" DynamicMethod.
              ParameterInfo[] args = Method.GetParameters();
-@@ -205,4 +241,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -169,4 +206,22 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         }
+ 
++        // A LegacyHook normally exposes the LegacyDetour that backs it. On iOS
++        // the hook is registered directly with the managed gate, so expose a
++        // small facade that preserves that public API without creating a second
++        // detour registration.
++        internal LegacyDetour(LegacyHook owner, MethodBase from, MethodBase to, LegacyDetourConfig config) {
++            _iosHook = true;
++            _iosHookOwner = owner ?? throw new ArgumentNullException(nameof(owner));
++            Method = from ?? throw new ArgumentNullException(nameof(from));
++            Target = to ?? throw new ArgumentNullException(nameof(to));
++            TargetReal = to;
++            _GlobalIndex = AcquireGlobalIndex();
++            _Priority = config.Priority;
++            _ID = string.IsNullOrEmpty(config.ID) ? Target.GetID(simple: true) : config.ID;
++            _iosConfig = config;
++            if (config.Before != null) _Before.AddRange(config.Before);
++            if (config.After != null) _After.AddRange(config.After);
++        }
++
+         public LegacyDetour(MethodBase from, MethodBase to, ref LegacyDetourConfig config) : this(from, to, config) {}
+         public LegacyDetour(MethodBase from, MethodBase to) : this(from, to, LegacyDetourContext.Current?.DetourConfig ?? default) {}
+@@ -205,4 +260,20 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new ObjectDisposedException(nameof(LegacyDetour));
  
++            if (_iosHookOwner != null) {
++                _iosHookOwner.Apply();
++                return;
++            }
++
 +            if (_iosHook) {
 +                if (_iosApplied || !(OnDetour?.InvokeWhileTrue(this, Method, Target) ?? true))
 +                    return;
@@ -304,9 +333,14 @@ index b82f6efc..daa32d53 100644
 +
              if (IsApplied || !(OnDetour?.InvokeWhileTrue(this, Method, Target) ?? true))
                  return;
-@@ -216,4 +263,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -216,4 +287,18 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new ObjectDisposedException(nameof(LegacyDetour));
  
++            if (_iosHookOwner != null) {
++                _iosHookOwner.Undo();
++                return;
++            }
++
 +            if (_iosHook) {
 +                if (!_iosApplied || !(OnUndo?.InvokeWhileTrue(this) ?? true))
 +                    return;
@@ -318,9 +352,14 @@ index b82f6efc..daa32d53 100644
 +
              if (!IsApplied || !(OnUndo?.InvokeWhileTrue(this) ?? true))
                  return;
-@@ -227,4 +283,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -227,4 +312,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  return;
  
++            if (_iosHookOwner != null) {
++                _iosHookOwner.Free();
++                return;
++            }
++
 +            if (_iosHook) {
 +                Undo();
 +                _iosValid = false;
@@ -329,9 +368,14 @@ index b82f6efc..daa32d53 100644
 +
              Undo();
              IsValid = false;
-@@ -243,4 +305,14 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -243,4 +339,19 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  return;
  
++            if (_iosHookOwner != null) {
++                _iosHookOwner.UpdateIOSConfig(_iosConfig);
++                return;
++            }
++
 +            if (_iosHook) {
 +                if (!_iosApplied) return;
 +                Action<MethodBase, object> remove = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.RemoveDetour") as Action<MethodBase, object>;
@@ -344,7 +388,7 @@ index b82f6efc..daa32d53 100644
 +
              actualHook?.Dispose();
              if (IsApplied) {
-@@ -261,4 +333,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -261,4 +372,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  return remoteTrampoline;
  
 +            if (_iosHook)
@@ -352,19 +396,19 @@ index b82f6efc..daa32d53 100644
 +
              if (signature == null)
                  signature = Target;
-@@ -295,4 +370,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -295,4 +409,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new InvalidOperationException($"Type {typeof(T)} not a delegate type.");
  
 +            if (_iosHook) {
 +                Func<MethodBase, object, Type, Delegate> create = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.CreateDetourTrampoline") as Func<MethodBase, object, Type, Delegate>;
 +                if (create == null) throw new InvalidOperationException("The iOS detour trampoline backend is not available.");
-+                return (T) create(Method, this, typeof(T));
++                return (T) create(Method, _iosHookOwner ?? (object) this, typeof(T));
 +            }
 +
              return GenerateTrampoline(typeof(T).GetMethod("Invoke")).CreateDelegate(typeof(T)) as T;
          }
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
-index 5ab6d3d7..f7ed8911 100644
+index 5ab6d3d7..27f82952 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
 @@ -26,6 +26,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
@@ -389,15 +433,26 @@ index 5ab6d3d7..f7ed8911 100644
 +                from = from.GetIdentifiable();
              Method = from;
              Target = to;
-@@ -97,4 +103,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -97,4 +103,26 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
              MethodInfo origInvoke = _OrigDelegateInvoke = origType?.GetMethod("Invoke");
  
++            // Preserve the public hook target descriptor when the iOS managed
++            // path avoids generating a DynamicMethod proxy.
++            TargetReal = Target;
++
 +            // iOS uses woven managed gates rather than executable trampolines.
 +            // The runtime invokes this original hook method through reflection and
 +            // supplies an interpreted orig delegate when the signature requests it.
 +            if (AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddReflectedOn") is Action<MethodBase, MethodInfo, object, object, object>) {
 +                _iosHook = true;
 +                _iosConfig = config;
++                _Detour = new LegacyDetour(this, Method, Target, new LegacyDetourConfig() {
++                    ManualApply = true,
++                    Priority = config.Priority,
++                    ID = config.ID,
++                    Before = config.Before,
++                    After = config.After
++                });
 +                if (!config.ManualApply)
 +                    Apply();
 +                return;
@@ -405,7 +460,7 @@ index 5ab6d3d7..f7ed8911 100644
 +
              DynamicMethodDefinition dmd;
              ILProcessor il;
-@@ -209,4 +226,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -209,4 +237,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new ObjectDisposedException(nameof(LegacyHook));
  
 +            if (_iosHook) {
@@ -421,7 +476,7 @@ index 5ab6d3d7..f7ed8911 100644
 +
              if (!IsApplied && !(OnDetour?.InvokeWhileTrue(this, Method, Target, DelegateTarget) ?? true))
                  return;
-@@ -219,4 +247,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -219,4 +258,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new ObjectDisposedException(nameof(LegacyHook));
  
 +            if (_iosHook) {
@@ -435,7 +490,7 @@ index 5ab6d3d7..f7ed8911 100644
 +
              if (IsApplied && !(OnUndo?.InvokeWhileTrue(this) ?? true))
                  return;
-@@ -231,4 +268,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -231,8 +279,37 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  return;
  
 +            if (_iosHook) {
@@ -447,7 +502,33 @@ index 5ab6d3d7..f7ed8911 100644
 +
              _Detour.Free();
              _Free();
-@@ -253,4 +297,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         }
+ 
++        internal void UpdateIOSConfig(LegacyDetourConfig config) {
++            if (!_iosHook)
++                return;
++
++            _iosConfig = new LegacyHookConfig() {
++                ManualApply = true,
++                Priority = config.Priority,
++                ID = config.ID,
++                Before = config.Before,
++                After = config.After
++            };
++            if (!_iosApplied)
++                return;
++
++            Action<MethodBase, object> remove = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.RemoveReflectedOn") as Action<MethodBase, object>;
++            Action<MethodBase, MethodInfo, object, object, object> add = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddReflectedOn") as Action<MethodBase, MethodInfo, object, object, object>;
++            remove?.Invoke(Method, this);
++            if (add == null)
++                throw new InvalidOperationException("The iOS managed hook backend is not available.");
++            add(Method, (MethodInfo) Target, DelegateTarget, this, _iosConfig);
++        }
++
+         private void _Free() {
+             _RefTargetCell?.Dispose();
+@@ -253,4 +330,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new InvalidOperationException($"Type {typeof(T)} not a delegate type.");
  
 +            if (_iosHook) {

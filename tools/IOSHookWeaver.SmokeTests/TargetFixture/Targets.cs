@@ -126,6 +126,16 @@ public sealed class LegacyDetourTarget
 
 public delegate int LegacyDetourOriginal(LegacyDetourTarget target, int amount);
 
+public delegate int LegacyHookOriginal(LegacyDetourTarget target, int amount);
+
+public static class LegacyHookTargetHooks
+{
+    public static int OnAdd(LegacyHookOriginal orig, LegacyDetourTarget target, int amount)
+    {
+        return orig(target, amount) + 100;
+    }
+}
+
 public struct TestStructTarget
 {
     private int value;

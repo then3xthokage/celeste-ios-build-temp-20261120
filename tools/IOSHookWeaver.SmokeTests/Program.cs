@@ -93,6 +93,7 @@ internal static class Program
         VerifyEverestDualStackConnection(everestRuntime);
         VerifyEverestDependencyDownloaderHookGates(projectDirectory, configuration, gameAssemblyPath);
         VerifyLegacyDetourTrampoline(everestRuntime, targetAssembly);
+        VerifyLegacyHookManagedRoute(everestRuntime, targetAssembly);
 
         Type colorImportType = targetAssembly.GetType("ColorNativeImportFixture", true);
         MethodInfo colorImport = colorImportType.GetMethod("ColorHLSToRGB");
@@ -832,6 +833,64 @@ internal static class Program
         object afterRemoval = Activator.CreateInstance(targetType);
         AssertEqual("Everest public LegacyDetour removal", "7",
             targetMethod.Invoke(afterRemoval, new object[] { 2 }).ToString());
+    }
+
+    private static void VerifyLegacyHookManagedRoute(Assembly everestRuntime, Assembly targetAssembly)
+    {
+        Type legacyHookType = everestRuntime.GetType("Celeste.Mod.Helpers.LegacyMonoMod.LegacyHook", true);
+        ConstructorInfo constructor = legacyHookType.GetConstructor(new[] { typeof(MethodBase), typeof(MethodInfo) });
+        if (constructor == null)
+            throw new MissingMethodException(legacyHookType.FullName, ".ctor(MethodBase, MethodInfo)");
+
+        Type targetType = targetAssembly.GetType("LegacyDetourTarget", true);
+        MethodInfo targetMethod = targetType.GetMethod("Add", BindingFlags.Public | BindingFlags.Instance);
+        MethodInfo hookMethod = targetAssembly.GetType("LegacyHookTargetHooks", true)
+            .GetMethod("OnAdd", BindingFlags.Public | BindingFlags.Static);
+        object hook = constructor.Invoke(new object[] { targetMethod, hookMethod });
+        try
+        {
+            object detour = legacyHookType.GetProperty("Detour", BindingFlags.Public | BindingFlags.Instance)
+                .GetValue(hook);
+            if (detour == null)
+                throw new InvalidOperationException("The iOS LegacyHook route did not expose its public LegacyDetour facade.");
+            if (legacyHookType.GetField("TargetReal", BindingFlags.Public | BindingFlags.Instance).GetValue(hook) == null)
+                throw new InvalidOperationException("The iOS LegacyHook route left TargetReal unset.");
+            if (!(bool)detour.GetType().GetProperty("IsApplied").GetValue(detour))
+                throw new InvalidOperationException("The LegacyHook's public Detour facade did not report its applied state.");
+
+            object instance = Activator.CreateInstance(targetType);
+            AssertEqual("Everest LegacyHook orig delegate route", "107",
+                targetMethod.Invoke(instance, new object[] { 2 }).ToString());
+
+            Type originalDelegateType = targetAssembly.GetType("LegacyDetourOriginal", true);
+            MethodInfo generateTrampoline = detour.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .SingleOrDefault(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition &&
+                    method.GetGenericArguments().Length == 1 && method.GetParameters().Length == 0);
+            Delegate trampoline = (Delegate)generateTrampoline.MakeGenericMethod(originalDelegateType).Invoke(detour, null);
+            object originalInstance = Activator.CreateInstance(targetType);
+            AssertEqual("Everest LegacyHook public Detour trampoline", "7",
+                trampoline.DynamicInvoke(new[] { originalInstance, (object)2 }).ToString());
+
+            detour.GetType().GetMethod("Undo", BindingFlags.Public | BindingFlags.Instance).Invoke(detour, null);
+            if ((bool)legacyHookType.GetProperty("IsApplied").GetValue(hook))
+                throw new InvalidOperationException("Undo through the LegacyHook.Detour facade left the managed hook applied.");
+            object afterUndo = Activator.CreateInstance(targetType);
+            AssertEqual("Everest LegacyHook Detour undo", "7",
+                targetMethod.Invoke(afterUndo, new object[] { 2 }).ToString());
+
+            detour.GetType().GetMethod("Apply", BindingFlags.Public | BindingFlags.Instance).Invoke(detour, null);
+            object reapplied = Activator.CreateInstance(targetType);
+            AssertEqual("Everest LegacyHook Detour reapply", "107",
+                targetMethod.Invoke(reapplied, new object[] { 2 }).ToString());
+        }
+        finally
+        {
+            legacyHookType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance).Invoke(hook, null);
+        }
+
+        object afterDispose = Activator.CreateInstance(targetType);
+        AssertEqual("Everest LegacyHook disposal", "7",
+            targetMethod.Invoke(afterDispose, new object[] { 2 }).ToString());
     }
 
     private static object AddReflected(MethodInfo target, MethodInfo hook)
