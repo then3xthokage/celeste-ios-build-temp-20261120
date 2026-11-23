@@ -95,6 +95,7 @@ namespace celestemeow
 
         private static readonly IDeserializer MetadataDeserializer = new DeserializerBuilder().IgnoreUnmatchedProperties().Build();
         private static readonly HttpClient Http = CreateHttpClient();
+        private const int MaxDependencySearchCandidates = 12;
         private static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "CelesteMods");
         private static readonly string ModsDirectory = Path.Combine(Root, "Mods");
         private static readonly string AutoUpdateSettingPath = Path.Combine(Root, "auto-update.txt");
@@ -514,9 +515,19 @@ namespace celestemeow
             await RefreshDependencyGraphAsync(progress);
             ApplyDependencyGraph(rootPackage, dependencyGraphCache);
             Dictionary<string, InstalledPackage> installed = LoadInstalledPackages();
-            Dictionary<string, UpdateInfo> catalog = HasUnsatisfiedDependencies(rootPackage, rootPackage, installed)
-                ? await DownloadUpdateCatalogAsync()
-                : new Dictionary<string, UpdateInfo>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, UpdateInfo> catalog = new Dictionary<string, UpdateInfo>(StringComparer.OrdinalIgnoreCase);
+            if (HasUnsatisfiedDependencies(rootPackage, rootPackage, installed))
+            {
+                try
+                {
+                    catalog = await DownloadUpdateCatalogAsync();
+                }
+                catch (Exception exception)
+                {
+                    progress?.Report("Everest's verified update catalog is unavailable; searching GameBanana for required packages.");
+                    Console.WriteLine("Everest update catalog unavailable during dependency install: " + exception);
+                }
+            }
             HashSet<string> resolving = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             List<string> installedNames = new List<string>();
             foreach (ModMetadata module in rootPackage.Modules)
@@ -578,19 +589,27 @@ namespace celestemeow
             try
             {
                 UpdateInfo update;
-                if (!TryGetCatalogUpdate(catalog, dependency.Name, out update) || update.Hashes.Count == 0)
-                    throw new FileNotFoundException("A required dependency could not be found in Everest's update catalog: " + dependency.Name + ".");
+                bool hasVerifiedUpdate = TryGetCatalogUpdate(catalog, dependency.Name, out update) &&
+                    update != null && update.Hashes != null && update.Hashes.Count > 0;
 
                 progress?.Report("Installing required dependency " + dependency.Name + "...");
                 string tempPath = Path.Combine(Root, "dependency-" + Guid.NewGuid().ToString("N") + ".zip.part");
                 try
                 {
-                    await DownloadWithMirrorsAsync(update.Url, update.MirrorName, tempPath, progress);
-                    string hash = ComputeXxHash64(tempPath);
-                    if (!update.Hashes.Any(expected => string.Equals(expected, hash, StringComparison.OrdinalIgnoreCase)))
-                        throw new InvalidDataException("The dependency download checksum did not match Everest's catalog for " + dependency.Name + ".");
+                    PackageInfo package;
+                    if (hasVerifiedUpdate)
+                    {
+                        await DownloadWithMirrorsAsync(update.Url, update.MirrorName, tempPath, progress);
+                        string hash = ComputeXxHash64(tempPath);
+                        if (!update.Hashes.Any(expected => string.Equals(expected, hash, StringComparison.OrdinalIgnoreCase)))
+                            throw new InvalidDataException("The dependency download checksum did not match Everest's catalog for " + dependency.Name + ".");
+                        package = InspectArchive(tempPath, dependency.Name);
+                    }
+                    else
+                    {
+                        package = await DownloadDependencyFromGameBananaAsync(dependency, tempPath, progress);
+                    }
 
-                    PackageInfo package = InspectArchive(tempPath, dependency.Name);
                     ApplyDependencyGraph(package, dependencyGraphCache);
                     ModMetadata downloadedModule = FindModule(package, dependency.Name);
                     if (downloadedModule == null || !VersionSatisfies(dependency.Version, downloadedModule.Version))
@@ -624,6 +643,99 @@ namespace celestemeow
             {
                 resolving.Remove(dependency.Name);
             }
+        }
+
+        private static async Task<PackageInfo> DownloadDependencyFromGameBananaAsync(
+            ModDependency dependency,
+            string tempPath,
+            IProgress<string> progress)
+        {
+            List<CatalogMod> searchResults;
+            try
+            {
+                searchResults = await SearchCatalogAsync(dependency.Name);
+            }
+            catch (Exception exception)
+            {
+                throw new IOException(
+                    "Everest has no verified download for " + dependency.Name + ", and GameBanana search is unavailable.",
+                    exception);
+            }
+
+            string normalizedName = ModDependencyResolver.NormalizeName(dependency.Name);
+            List<CatalogMod> candidates = searchResults
+                .Where(candidate => candidate != null && !string.IsNullOrWhiteSpace(candidate.Url))
+                .GroupBy(candidate => string.IsNullOrWhiteSpace(candidate.MirrorName) ? candidate.Url : candidate.MirrorName,
+                    StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .Select((candidate, index) => new
+                {
+                    Candidate = candidate,
+                    Index = index,
+                    Score = GetDependencySearchScore(candidate, normalizedName)
+                })
+                .OrderByDescending(item => item.Score)
+                .ThenBy(item => item.Index)
+                .Take(MaxDependencySearchCandidates)
+                .Select(item => item.Candidate)
+                .ToList();
+
+            if (candidates.Count == 0)
+                throw new FileNotFoundException(
+                    "Everest has no verified download for " + dependency.Name + ", and GameBanana returned no mod packages for it.");
+
+            Exception lastError = null;
+            foreach (CatalogMod candidate in candidates)
+            {
+                try
+                {
+                    progress?.Report("Checking " + candidate.DisplayName + " for required module " + dependency.Name + "...");
+                    await DownloadWithMirrorsAsync(candidate.Url, candidate.MirrorName, tempPath, progress);
+                    PackageInfo package = InspectArchive(tempPath, candidate.Name);
+                    ModMetadata module = FindModule(package, dependency.Name);
+                    if (module == null)
+                    {
+                        lastError = new InvalidDataException(
+                            "The package " + candidate.DisplayName + " does not contain module " + dependency.Name + ".");
+                    }
+                    else if (!VersionSatisfies(dependency.Version, module.Version))
+                    {
+                        lastError = new InvalidDataException(
+                            "The package " + candidate.DisplayName + " provides " + dependency.Name + " " + module.Version +
+                            ", which does not satisfy version " + dependency.Version + ".");
+                    }
+                    else
+                    {
+                        progress?.Report("Found compatible " + dependency.Name + " " + module.Version + " on GameBanana.");
+                        return package;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    lastError = exception;
+                }
+
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            }
+
+            throw new FileNotFoundException(
+                "No GameBanana package found a compatible " + dependency.Name + " module after checking " + candidates.Count + " candidate(s).",
+                lastError);
+        }
+
+        private static int GetDependencySearchScore(CatalogMod candidate, string normalizedName)
+        {
+            if (normalizedName.Length == 0) return 0;
+            string candidateName = ModDependencyResolver.NormalizeName(candidate.Name);
+            if (candidateName.Length == 0) return 0;
+            string fileName = Path.GetFileNameWithoutExtension(candidate.DownloadName ?? "");
+            if (candidateName == normalizedName ||
+                ModDependencyResolver.NormalizeName(candidate.FileDescription) == normalizedName ||
+                ModDependencyResolver.NormalizeName(fileName) == normalizedName)
+                return 2;
+            if (candidateName.Contains(normalizedName) || normalizedName.Contains(candidateName))
+                return 1;
+            return 0;
         }
 
         private static Dictionary<string, InstalledPackage> LoadInstalledPackages()

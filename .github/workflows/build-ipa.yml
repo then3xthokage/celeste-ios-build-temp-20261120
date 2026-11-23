@@ -55,6 +55,10 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: dotnet run --configuration Release --project "$GITHUB_WORKSPACE/tools/IOSHookWeaver.SmokeTests/IOSHookWeaver.SmokeTests.csproj"
 
+      - name: Run iOS mod dependency smoke tests
+        working-directory: ${{ runner.temp }}
+        run: dotnet run --configuration Release --project "$GITHUB_WORKSPACE/tools/IOSModLibrarySmoke/IOSModLibrarySmoke.csproj"
+
       - name: Check required private secrets
         shell: bash
         env:
