@@ -30,6 +30,8 @@ internal static class Program
             await VerifyLiveLegacyDependencyVersionAsync();
         if (args.Contains("--live-map-version-audit", StringComparer.OrdinalIgnoreCase))
             await AuditLiveMapDependencyVersionsAsync();
+        if (args.Contains("--live-spark-audio", StringComparer.OrdinalIgnoreCase))
+            await VerifyLiveDependencyAsync(new ModDependency { Name = "SparkInTheMachineAudio", Version = "1.0.2" });
         Console.WriteLine("PASS iOS mod dependency and map-package smoke checks");
         return 0;
     }
@@ -304,6 +306,25 @@ internal static class Program
         }
 
         Console.WriteLine("Historical map dependency audit resolved " + resolved + "/" + requirements.Length + ".");
+    }
+
+    private static async Task VerifyLiveDependencyAsync(ModDependency dependency)
+    {
+        string path = Path.Combine(Path.GetTempPath(), "celeste-ios-live-dependency-" + Guid.NewGuid().ToString("N") + ".zip");
+        try
+        {
+            object package = await InvokePrivateAsync("DownloadDependencyFromGameBananaAsync", dependency, path, null);
+            object module = InvokePrivate("FindModule", package, dependency.Name);
+            string version = module == null ? "missing" : GetProperty<string>(module, "Version");
+            Require(module != null && (bool)InvokePrivate("VersionSatisfies", dependency.Version, version),
+                "The live GameBanana resolver must return a compatible " + dependency.Name + " package.");
+            Console.WriteLine("PASS live dependency " + dependency.Name + " " + version +
+                " (required " + dependency.Version + ")");
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 
     private static void VerifyEverestVersionCompatibility()
