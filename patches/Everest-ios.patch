@@ -157,6 +157,12 @@ index b82f6efc..d9286eed 100644
              // Generate a "chained trampoline" DynamicMethod.
              ParameterInfo[] args = Method.GetParameters();
              Type[] argTypes;
+@@ -155,3 +178,4 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         public LegacyDetour(MethodBase from, MethodBase to, LegacyDetourConfig config) {
+-            from = from.GetIdentifiable();
++            if (!(AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddDetour") is Action<MethodBase, MethodInfo, object, object>))
++                from = from.GetIdentifiable();
+             if (from.Equals(to))
 @@ -204,6 +239,17 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
              if (!IsValid)
                  throw new ObjectDisposedException(nameof(LegacyDetour));
@@ -264,7 +270,13 @@ index 5ab6d3d7..66ebdf53 100644
  
          public readonly MethodBase Method;
          public readonly MethodBase Target;
-@@ -96,6 +101,17 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -57,3 +62,4 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         public LegacyHook(MethodBase from, MethodInfo to, object target, ref LegacyHookConfig config) {
+-            from = from.GetIdentifiable();
++            if (!(AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddReflectedOn") is Action<MethodBase, MethodInfo, object, object, object>))
++                from = from.GetIdentifiable();
+             Method = from;
+@@ -96,6 +102,17 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
  
              MethodInfo origInvoke = _OrigDelegateInvoke = origType?.GetMethod("Invoke");
  
