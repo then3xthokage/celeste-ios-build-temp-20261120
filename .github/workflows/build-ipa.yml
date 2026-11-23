@@ -2,6 +2,12 @@ name: Build Celeste iOS IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_device_test_ipa:
+        description: Upload a non-certified IPA to the private device-test release for on-device testing
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -375,6 +381,26 @@ jobs:
               --title "Latest Celeste iOS IPA" \
               --notes "Private build output. Replaced by each successful run." \
               --target celeste-ios-build
+          fi
+          gh release upload "$output_tag" "$GITHUB_WORKSPACE/celestemeow.ipa" \
+            --repo "$storage_repo" \
+            --clobber
+
+      - name: Store IPA in private device-test release
+        if: inputs.publish_device_test_ipa == true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+        run: |
+          set -euo pipefail
+          storage_repo="hbashton/celeste-ios-ci-temp-20261120"
+          output_tag="celeste-ios-device-test-output"
+          if ! gh release view "$output_tag" --repo "$storage_repo" >/dev/null 2>&1; then
+            gh release create "$output_tag" \
+              --repo "$storage_repo" \
+              --title "Celeste iOS device-test build" \
+              --notes "Private, non-certified device-test IPA. This build is for collecting on-device compatibility results and does not represent full mod compatibility." \
+              --target "$GITHUB_SHA"
           fi
           gh release upload "$output_tag" "$GITHUB_WORKSPACE/celestemeow.ipa" \
             --repo "$storage_repo" \
