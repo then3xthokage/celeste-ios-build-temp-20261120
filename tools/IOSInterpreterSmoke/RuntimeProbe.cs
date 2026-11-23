@@ -111,7 +111,7 @@ public static class RuntimeProbe
                 new object[] { true, 37 });
             AssertEqual("Everest LegacyHook constructor body", 37,
                 everestConstructorTargetType.GetField("Value").GetValue(everestConstructorTarget));
-            AssertEqual("Everest LegacyHook constructor post-body", 1,
+            AssertEqual("Everest LegacyHook constructor body and post-hook effects", 5,
                 everestConstructorTargetType.GetField("PostValue").GetValue(everestConstructorTarget));
             AssertEqual("Everest LegacyHook constructor callback count", 1,
                 everestConstructorHooksType.GetField("Calls").GetValue(null));
@@ -126,7 +126,7 @@ public static class RuntimeProbe
             new object[] { true, 41 });
         AssertEqual("Everest LegacyHook constructor removal", 41,
             everestConstructorTargetType.GetField("Value").GetValue(unhookedConstructorTarget));
-        AssertEqual("Everest LegacyHook constructor removal leaves post-body untouched", 0,
+        AssertEqual("Everest LegacyHook constructor removal preserves body-only value", 4,
             everestConstructorTargetType.GetField("PostValue").GetValue(unhookedConstructorTarget));
 
         Mark("ordinary On hook and removal");
