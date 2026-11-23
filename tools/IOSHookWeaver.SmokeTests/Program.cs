@@ -355,23 +355,36 @@ internal static class Program
             "net8.0", "FNA.dll");
         string everestFixturePath = Path.Combine(projectDirectory, "EverestResolverFixture", "bin", configuration,
             "net8.0", "EverestResolverFixture.dll");
+        string gameAssemblyFixturePath = Path.Combine(projectDirectory, "TargetFixture", "bin", configuration,
+            "net8.0", "Celeste.dll");
         if (!File.Exists(fnaFixturePath))
             throw new FileNotFoundException("The bundled FNA resolver fixture was not built.", fnaFixturePath);
         if (!File.Exists(everestFixturePath))
             throw new FileNotFoundException("The bundled Everest resolver fixture was not built.", everestFixturePath);
+        if (!File.Exists(gameAssemblyFixturePath))
+            throw new FileNotFoundException("The bundled Celeste resolver fixture was not built.", gameAssemblyFixturePath);
 
         string appBundle = Path.Combine(Path.GetTempPath(), "CelesteIOSRuntimeResolverSmoke-" + Guid.NewGuid().ToString("N"));
         string runtimeDirectory = Path.Combine(appBundle, "RuntimeAssemblies");
         string everestDirectory = Path.Combine(appBundle, "RuntimeAssemblies", "Everest");
         Directory.CreateDirectory(runtimeDirectory);
         Directory.CreateDirectory(everestDirectory);
+        File.Copy(gameAssemblyFixturePath, Path.Combine(appBundle, "Celeste.dll"));
         File.Copy(fnaFixturePath, Path.Combine(runtimeDirectory, "FNA.dll"));
         File.Copy(everestFixturePath, Path.Combine(everestDirectory, "EverestResolverFixture.dll"));
+
+        string locatedGameAssembly = IOSRuntimeAssemblyResolver.FindAssemblyPath(appBundle, "Celeste");
+        if (!string.Equals(locatedGameAssembly, Path.Combine(appBundle, "Celeste.dll"), StringComparison.Ordinal))
+            throw new InvalidOperationException("The launcher did not locate Celeste.dll at the app bundle root.");
 
         AssemblyLoadContext context = new AssemblyLoadContext("NestedRuntimeResolverSmoke", isCollectible: true);
         try
         {
             IOSRuntimeAssemblyResolver.Attach(context, appBundle, null);
+            Assembly gameFixture = context.LoadFromAssemblyPath(locatedGameAssembly);
+            if (!string.Equals(gameFixture.GetName().Name, "Celeste", StringComparison.Ordinal))
+                throw new InvalidOperationException("The launcher loaded the wrong assembly from the app bundle root.");
+
             Assembly fnaFixture = context.LoadFromAssemblyName(new AssemblyName("FNA, Version=24.1.0.0"));
             Type fnaProbe = fnaFixture.GetType("BundledResolverFixture.Probe", throwOnError: true);
             string fnaValue = (string)fnaProbe.GetProperty("Value").GetValue(null);
@@ -391,7 +404,7 @@ internal static class Program
             catch { }
         }
 
-        Console.WriteLine("PASS iOS runtime resolver loads FNA and Everest assemblies from their bundled folders.");
+        Console.WriteLine("PASS iOS runtime resolver locates Celeste.dll at the app bundle root and loads FNA and Everest assemblies from their bundled folders.");
     }
 
     private static byte[] ApplyEverestStyleConstructorShape(byte[] source)

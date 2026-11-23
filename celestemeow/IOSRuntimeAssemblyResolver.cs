@@ -8,6 +8,35 @@ namespace celestemeow
 {
     internal static class IOSRuntimeAssemblyResolver
     {
+        internal static string FindAssemblyPath(string appBundleDirectory, string assemblyName)
+        {
+            if (string.IsNullOrWhiteSpace(appBundleDirectory))
+                return null;
+            if (string.IsNullOrWhiteSpace(assemblyName))
+                throw new ArgumentException("An assembly name is required.", nameof(assemblyName));
+
+            string assemblyFile = Path.GetFileName(assemblyName);
+            if (!assemblyFile.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                assemblyFile += ".dll";
+
+            string fullBaseDirectory = Path.GetFullPath(appBundleDirectory);
+            string[] directories =
+            {
+                fullBaseDirectory,
+                Path.Combine(fullBaseDirectory, "RuntimeAssemblies"),
+                Path.Combine(fullBaseDirectory, "RuntimeAssemblies", "Everest"),
+                Path.Combine(fullBaseDirectory, "celeste")
+            };
+
+            foreach (string directory in directories)
+            {
+                string candidate = Path.Combine(directory, assemblyFile);
+                if (File.Exists(candidate))
+                    return Path.GetFullPath(candidate);
+            }
+            return null;
+        }
+
         internal static void Attach(AssemblyLoadContext context, string appBaseDirectory, Action<string> trace)
         {
             if (context == null) throw new ArgumentNullException(nameof(context));

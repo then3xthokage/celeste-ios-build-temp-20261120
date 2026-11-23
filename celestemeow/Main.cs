@@ -19,6 +19,7 @@ namespace celestemeow
         static UIWindow modManagerWindow;
         static ModManagerViewController modManagerController;
         static bool celesteIsRunning;
+        static string appBundleDirectory;
         static readonly object DiagnosticsLock = new object();
         static string startupErrorPath;
 
@@ -126,11 +127,15 @@ namespace celestemeow
                 Console.SetOut(startupWriter);
                 Console.SetError(startupWriter);
 
+                appBundleDirectory = NSBundle.MainBundle.BundlePath;
+                if (string.IsNullOrWhiteSpace(appBundleDirectory))
+                    appBundleDirectory = AppContext.BaseDirectory;
+
                 IOSRuntimeAssemblyResolver.Attach(
                     AssemblyLoadContext.Default,
-                    AppContext.BaseDirectory,
+                    appBundleDirectory,
                     TraceStartup);
-                TraceStartup("managed runtime assembly resolver registered; base=" + AppContext.BaseDirectory);
+                TraceStartup("managed runtime assembly resolver registered; bundle=" + appBundleDirectory + "; base=" + AppContext.BaseDirectory);
 
                 AppDomain.CurrentDomain.UnhandledException += HandleUnhandledException;
                 TaskScheduler.UnobservedTaskException += HandleUnobservedTaskException;
@@ -328,15 +333,31 @@ namespace celestemeow
             IOSNativeImports.EnsureRequiredImportsAreLinked();
             RegisterIOSClipboardDelegates();
             IOSHookRuntime.Initialize();
-            string gameAssemblyPath = typeof(Celeste.Celeste).Assembly.Location;
-            if (string.IsNullOrEmpty(gameAssemblyPath))
-                gameAssemblyPath = Path.Combine(AppContext.BaseDirectory, "Celeste.dll");
+            string bundleDirectory = string.IsNullOrWhiteSpace(appBundleDirectory)
+                ? NSBundle.MainBundle.BundlePath
+                : appBundleDirectory;
+            if (string.IsNullOrWhiteSpace(bundleDirectory))
+                bundleDirectory = AppContext.BaseDirectory;
+
+            string gameAssemblyPath = IOSRuntimeAssemblyResolver.FindAssemblyPath(bundleDirectory, "Celeste.dll");
+            if (string.IsNullOrWhiteSpace(gameAssemblyPath) &&
+                !string.Equals(bundleDirectory, AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase))
+                gameAssemblyPath = IOSRuntimeAssemblyResolver.FindAssemblyPath(AppContext.BaseDirectory, "Celeste.dll");
+            if (string.IsNullOrWhiteSpace(gameAssemblyPath))
+                throw new FileNotFoundException(
+                    "Celeste.dll is missing from the app bundle. Searched " + bundleDirectory + " and " + AppContext.BaseDirectory + ".",
+                    "Celeste.dll");
+
+            TraceStartup("loading Celeste assembly from " + gameAssemblyPath);
             IOSHookRuntime.ConfigureGameAssembly(gameAssemblyPath);
             AppDomain.CurrentDomain.SetData("Celeste.IOSHookRuntime.EverestDataPath", IOSModLibrary.DataPath);
 
+            Assembly gameAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(gameAssemblyPath);
+            Type celesteType = gameAssembly.GetType("Celeste.Celeste", throwOnError: true);
+
             // thanks to pixel#0772 on the celeste discord server for this <3
             //Type MeWhenIStealCodeFromAScreenshotInTheCelesteDiscordServer = typeof(UIWindow).GetType();
-            MethodInfo method = typeof(Celeste.Celeste).GetMethod("Main", BindingFlags.NonPublic | BindingFlags.Static);
+            MethodInfo method = celesteType.GetMethod("Main", BindingFlags.NonPublic | BindingFlags.Static);
             if (method == null)
             {
                 TraceStartup("Celeste.Main reflection lookup failed");
