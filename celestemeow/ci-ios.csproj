@@ -12,6 +12,7 @@
     <AppIcon>AppIcon</AppIcon>
     <InfoPlist>Info.plist</InfoPlist>
     <EnableCodeSigning>false</EnableCodeSigning>
+    <EnableDefaultCodesignEntitlements>false</EnableDefaultCodesignEntitlements>
     <BuildIpa>true</BuildIpa>
     <ValidateXcodeVersion>false</ValidateXcodeVersion>
     <UseMonoRuntime>false</UseMonoRuntime>
