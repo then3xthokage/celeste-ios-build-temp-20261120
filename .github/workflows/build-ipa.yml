@@ -395,12 +395,17 @@ jobs:
           set -euo pipefail
           storage_repo="hbashton/celeste-ios-ci-temp-20261120"
           output_tag="celeste-ios-device-test-output"
+          target_branch="$(gh api "repos/$storage_repo" --jq '.default_branch')"
+          if [ -z "$target_branch" ]; then
+            echo "Could not determine the private storage repository's default branch." >&2
+            exit 1
+          fi
           if ! gh release view "$output_tag" --repo "$storage_repo" >/dev/null 2>&1; then
             gh release create "$output_tag" \
               --repo "$storage_repo" \
               --title "Celeste iOS device-test build" \
               --notes "Private, non-certified device-test IPA. This build is for collecting on-device compatibility results and does not represent full mod compatibility." \
-              --target "$GITHUB_SHA"
+              --target "$target_branch"
           fi
           gh release upload "$output_tag" "$GITHUB_WORKSPACE/celestemeow.ipa" \
             --repo "$storage_repo" \
