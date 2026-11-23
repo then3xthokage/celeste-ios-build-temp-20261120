@@ -107,11 +107,31 @@ namespace celestemeow
             public long Added;
         }
 
+        private sealed class GitHubRepository
+        {
+            public string FullName;
+            public string Name;
+            public string Url;
+        }
+
+        private sealed class GitHubReleaseAsset
+        {
+            public string Repository;
+            public string Name;
+            public string Url;
+            public string Digest;
+            public long Size;
+        }
+
         private static readonly IDeserializer MetadataDeserializer = new DeserializerBuilder().IgnoreUnmatchedProperties().Build();
         private static readonly HttpClient Http = CreateHttpClient();
+        private static readonly object CommunityCatalogLock = new object();
+        private static List<CatalogMod> communityModCatalogCache;
         private const int MaxDependencySearchCandidates = 12;
-        private const int MaxGameBananaFilesPerMod = 8;
+        private const int MaxGitHubRepositories = 8;
+        private const int MaxGitHubReleaseAssets = 8;
         private const int CelesteGameBananaId = 6460;
+        private const string CommunityModCatalogUrl = "https://maddie480.ovh/celeste/custom-entity-catalog.json";
         private static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "CelesteMods");
         private static readonly string ModsDirectory = Path.Combine(Root, "Mods");
         private static readonly string AutoUpdateSettingPath = Path.Combine(Root, "auto-update.txt");
@@ -613,6 +633,7 @@ namespace celestemeow
                 try
                 {
                     PackageInfo package;
+                    ModMetadata downloadedModule;
                     if (hasVerifiedUpdate)
                     {
                         await DownloadWithMirrorsAsync(update.Url, update.MirrorName, tempPath, progress);
@@ -620,6 +641,14 @@ namespace celestemeow
                         if (!update.Hashes.Any(expected => string.Equals(expected, hash, StringComparison.OrdinalIgnoreCase)))
                             throw new InvalidDataException("The dependency download checksum did not match Everest's catalog for " + dependency.Name + ".");
                         package = InspectArchive(tempPath, dependency.Name);
+
+                        downloadedModule = FindModule(package, dependency.Name);
+                        if (downloadedModule == null || !VersionSatisfies(dependency.Version, downloadedModule.Version))
+                        {
+                            progress?.Report(
+                                "Everest's current " + dependency.Name + " package does not satisfy version " + dependency.Version + "; checking compatible archived releases...");
+                            package = await DownloadDependencyFromGameBananaAsync(dependency, tempPath, progress);
+                        }
                     }
                     else
                     {
@@ -627,7 +656,7 @@ namespace celestemeow
                     }
 
                     ApplyDependencyGraph(package, dependencyGraphCache);
-                    ModMetadata downloadedModule = FindModule(package, dependency.Name);
+                    downloadedModule = FindModule(package, dependency.Name);
                     if (downloadedModule == null || !VersionSatisfies(dependency.Version, downloadedModule.Version))
                         throw new InvalidDataException("The downloaded package does not contain a compatible version of " + dependency.Name + ".");
 
@@ -662,6 +691,66 @@ namespace celestemeow
         }
 
         private static async Task<PackageInfo> DownloadDependencyFromGameBananaAsync(
+            ModDependency dependency,
+            string tempPath,
+            IProgress<string> progress)
+        {
+            Exception gameBananaError;
+            try
+            {
+                return await DownloadDependencyFromGameBananaCatalogAsync(dependency, tempPath, progress);
+            }
+            catch (Exception exception)
+            {
+                gameBananaError = exception;
+                progress?.Report("No compatible package was found in GameBanana search; checking the Celeste mod index...");
+            }
+
+            Exception communityError;
+            try
+            {
+                List<CatalogMod> communityCandidates = await SearchCommunityModCatalogAsync(dependency.Name, progress);
+                if (communityCandidates.Count == 0)
+                    throw new FileNotFoundException("The Celeste mod index has no exact GameBanana page for " + dependency.Name + ".");
+
+                Exception lastCommunityError = null;
+                foreach (CatalogMod candidate in communityCandidates)
+                {
+                    try
+                    {
+                        progress?.Report("Checking the listed GameBanana page for " + dependency.Name + "...");
+                        return await DownloadDependencyFromGameBananaItemAsync(candidate, dependency, tempPath, progress);
+                    }
+                    catch (Exception exception)
+                    {
+                        lastCommunityError = exception;
+                        try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                    }
+                }
+
+                throw new FileNotFoundException(
+                    "The listed GameBanana page did not provide a compatible " + dependency.Name + " package.",
+                    lastCommunityError);
+            }
+            catch (Exception exception)
+            {
+                communityError = exception;
+                progress?.Report("No compatible package was found in the Celeste mod index; checking GitHub releases...");
+            }
+
+            try
+            {
+                return await DownloadDependencyFromGitHubAsync(dependency, tempPath, progress);
+            }
+            catch (Exception githubError)
+            {
+                throw new FileNotFoundException(
+                    "No compatible public package for " + dependency.Name + " was found in Everest's verified catalog, GameBanana, the Celeste mod index, or GitHub releases.",
+                    new AggregateException(gameBananaError, communityError, githubError));
+            }
+        }
+
+        private static async Task<PackageInfo> DownloadDependencyFromGameBananaCatalogAsync(
             ModDependency dependency,
             string tempPath,
             IProgress<string> progress)
@@ -783,6 +872,132 @@ namespace celestemeow
             }
         }
 
+        private static async Task<List<CatalogMod>> SearchCommunityModCatalogAsync(
+            string dependencyName,
+            IProgress<string> progress)
+        {
+            string normalizedName = ModDependencyResolver.NormalizeName(dependencyName);
+            if (normalizedName.Length == 0) return new List<CatalogMod>();
+
+            List<CatalogMod> catalog = await GetCommunityModCatalogAsync(progress);
+            return catalog
+                .Where(candidate =>
+                    ModDependencyResolver.NormalizeName(candidate.DownloadName) == normalizedName ||
+                    ModDependencyResolver.NormalizeName(candidate.Name) == normalizedName)
+                .GroupBy(candidate => candidate.GameBananaId)
+                .Select(group => group.First())
+                .ToList();
+        }
+
+        private static async Task<List<CatalogMod>> GetCommunityModCatalogAsync(IProgress<string> progress)
+        {
+            lock (CommunityCatalogLock)
+            {
+                if (communityModCatalogCache != null) return communityModCatalogCache;
+            }
+
+            string cachePath = Path.Combine(Root, "custom-entity-catalog.json");
+            if (File.Exists(cachePath) && DateTime.UtcNow - File.GetLastWriteTimeUtc(cachePath) < TimeSpan.FromDays(1))
+            {
+                try
+                {
+                    List<CatalogMod> cached = ParseCommunityModCatalog(File.ReadAllText(cachePath));
+                    if (cached.Count > 0)
+                    {
+                        lock (CommunityCatalogLock) communityModCatalogCache = cached;
+                        return cached;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            try
+            {
+                progress?.Report("Refreshing the Celeste helper and mod page index...");
+                string json = await GetSmallTextAsync(CommunityModCatalogUrl);
+                List<CatalogMod> parsed = ParseCommunityModCatalog(json);
+                if (parsed.Count == 0)
+                    throw new InvalidDataException("The Celeste mod index did not contain any usable GameBanana pages.");
+
+                try
+                {
+                    Directory.CreateDirectory(Root);
+                    string temporaryPath = cachePath + ".tmp";
+                    File.WriteAllText(temporaryPath, json);
+                    File.Move(temporaryPath, cachePath, true);
+                }
+                catch
+                {
+                }
+
+                lock (CommunityCatalogLock) communityModCatalogCache = parsed;
+                return parsed;
+            }
+            catch (Exception exception)
+            {
+                if (File.Exists(cachePath))
+                {
+                    try
+                    {
+                        List<CatalogMod> cached = ParseCommunityModCatalog(File.ReadAllText(cachePath));
+                        if (cached.Count > 0)
+                        {
+                            progress?.Report("Using the saved Celeste mod page index while offline.");
+                            lock (CommunityCatalogLock) communityModCatalogCache = cached;
+                            return cached;
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                throw new IOException("The Celeste helper and mod page index could not be loaded.", exception);
+            }
+        }
+
+        private static List<CatalogMod> ParseCommunityModCatalog(string json)
+        {
+            using (JsonDocument document = JsonDocument.Parse(json))
+            {
+                JsonElement mods;
+                if (!document.RootElement.TryGetProperty("modInfo", out mods) || mods.ValueKind != JsonValueKind.Array)
+                    return new List<CatalogMod>();
+
+                List<CatalogMod> result = new List<CatalogMod>();
+                foreach (JsonElement item in mods.EnumerateArray())
+                {
+                    string moduleName = GetString(item, "modEverestYamlId").Trim();
+                    string name = GetString(item, "modName").Trim();
+                    string pageUrl = GetString(item, "pageUrl").Trim();
+                    Uri parsedUrl;
+                    if (string.IsNullOrWhiteSpace(moduleName)) moduleName = name;
+                    if (string.IsNullOrWhiteSpace(moduleName) ||
+                        !Uri.TryCreate(pageUrl, UriKind.Absolute, out parsedUrl) ||
+                        parsedUrl.Scheme != Uri.UriSchemeHttps ||
+                        !string.Equals(parsedUrl.Host, "gamebanana.com", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    string[] path = parsedUrl.AbsolutePath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+                    long id;
+                    if (path.Length != 2 || !string.Equals(path[0], "mods", StringComparison.OrdinalIgnoreCase) ||
+                        !long.TryParse(path[1], NumberStyles.None, CultureInfo.InvariantCulture, out id) || id <= 0)
+                        continue;
+
+                    result.Add(new CatalogMod
+                    {
+                        Name = string.IsNullOrWhiteSpace(name) ? moduleName : name,
+                        DownloadName = moduleName,
+                        Url = pageUrl,
+                        GameBananaId = id
+                    });
+                }
+                return result;
+            }
+        }
+
         private static List<CatalogMod> ParseGameBananaSearchResults(string json)
         {
             using (JsonDocument document = JsonDocument.Parse(json))
@@ -855,6 +1070,34 @@ namespace celestemeow
             }
         }
 
+        private static List<GameBananaFile> OrderGameBananaFilesForDependency(
+            IEnumerable<GameBananaFile> files,
+            ModDependency dependency)
+        {
+            if (files == null) return new List<GameBananaFile>();
+            return files
+                .Select((file, index) => new
+                {
+                    File = file,
+                    Index = index,
+                    Compatibility = GetAdvertisedGameBananaVersionCompatibility(file, dependency)
+                })
+                .OrderByDescending(item => item.Compatibility)
+                .ThenBy(item => item.Index)
+                .Select(item => item.File)
+                .ToList();
+        }
+
+        private static int GetAdvertisedGameBananaVersionCompatibility(GameBananaFile file, ModDependency dependency)
+        {
+            if (file == null || dependency == null || string.IsNullOrWhiteSpace(dependency.Version)) return 1;
+            Match match = Regex.Match(file.Description ?? string.Empty, @"(?<![\d.])v?(\d+(?:\.\d+){1,3})(?![\d.])", RegexOptions.IgnoreCase);
+            if (!match.Success) return 1;
+            Version advertised = ParseVersion(match.Groups[1].Value, null);
+            if (advertised == null) return 1;
+            return VersionSatisfies(dependency.Version, advertised.ToString()) ? 2 : 0;
+        }
+
         private static async Task<PackageInfo> DownloadDependencyFromGameBananaItemAsync(
             CatalogMod candidate,
             ModDependency dependency,
@@ -866,7 +1109,7 @@ namespace celestemeow
                 throw new FileNotFoundException("GameBanana has no public download files for " + candidate.Name + ".");
 
             Exception lastError = null;
-            foreach (GameBananaFile file in files.Take(MaxGameBananaFilesPerMod))
+            foreach (GameBananaFile file in OrderGameBananaFilesForDependency(files, dependency))
             {
                 try
                 {
@@ -894,6 +1137,297 @@ namespace celestemeow
             throw new InvalidDataException(
                 "No public file on the GameBanana page " + candidate.Name + " contains a compatible " + dependency.Name + " module.",
                 lastError);
+        }
+
+        private static async Task<PackageInfo> DownloadDependencyFromGitHubAsync(
+            ModDependency dependency,
+            string tempPath,
+            IProgress<string> progress)
+        {
+            List<GitHubRepository> searchResults = new List<GitHubRepository>();
+            Exception lastSearchError = null;
+            foreach (string query in GetDependencySearchQueries(dependency.Name))
+            {
+                try
+                {
+                    searchResults.AddRange(await SearchGitHubRepositoriesAsync(query));
+                    if (searchResults.Any(repository =>
+                        GetGitHubDependencySearchScore(repository, ModDependencyResolver.NormalizeName(dependency.Name)) == 2))
+                        break;
+                }
+                catch (Exception exception)
+                {
+                    lastSearchError = exception;
+                }
+            }
+
+            string normalizedName = ModDependencyResolver.NormalizeName(dependency.Name);
+            List<GitHubRepository> candidates = searchResults
+                .Where(repository => repository != null && !string.IsNullOrWhiteSpace(repository.FullName))
+                .GroupBy(repository => repository.FullName, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .Select((repository, index) => new
+                {
+                    Repository = repository,
+                    Index = index,
+                    Score = GetGitHubDependencySearchScore(repository, normalizedName)
+                })
+                .Where(item => item.Score > 0)
+                .OrderByDescending(item => item.Score)
+                .ThenBy(item => item.Index)
+                .Take(MaxGitHubRepositories)
+                .Select(item => item.Repository)
+                .ToList();
+
+            if (candidates.Count == 0)
+                throw new FileNotFoundException(
+                    "GitHub repository search found no likely source for " + dependency.Name + ".",
+                    lastSearchError);
+
+            Exception lastError = null;
+            foreach (GitHubRepository repository in candidates)
+            {
+                List<GitHubReleaseAsset> assets;
+                try
+                {
+                    assets = await GetGitHubReleaseAssetsAsync(repository.FullName);
+                }
+                catch (Exception exception)
+                {
+                    lastError = exception;
+                    continue;
+                }
+
+                foreach (GitHubReleaseAsset asset in assets.Take(MaxGitHubReleaseAssets))
+                {
+                    try
+                    {
+                        progress?.Report("Checking " + asset.Name + " from " + repository.FullName + "...");
+                        await DownloadGitHubReleaseAssetAsync(asset, tempPath, progress);
+                        VerifyGitHubAssetSha256(tempPath, asset.Digest);
+
+                        PackageInfo package = InspectArchive(tempPath, repository.Name);
+                        ModMetadata module = FindModule(package, dependency.Name);
+                        if (module == null)
+                        {
+                            lastError = new InvalidDataException(
+                                "The GitHub release asset does not contain module " + dependency.Name + ".");
+                        }
+                        else if (!VersionSatisfies(dependency.Version, module.Version))
+                        {
+                            lastError = new InvalidDataException(
+                                "The GitHub release asset provides " + dependency.Name + " " + module.Version +
+                                ", which does not satisfy version " + dependency.Version + ".");
+                        }
+                        else
+                        {
+                            progress?.Report("Found compatible " + dependency.Name + " " + module.Version + " on GitHub.");
+                            return package;
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        lastError = exception;
+                    }
+
+                    try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                }
+            }
+
+            throw new FileNotFoundException(
+                "No public GitHub release asset contained a compatible " + dependency.Name + " module after checking " + candidates.Count + " repository candidate(s).",
+                lastError);
+        }
+
+        private static async Task<List<GitHubRepository>> SearchGitHubRepositoriesAsync(string query)
+        {
+            if (string.IsNullOrWhiteSpace(query)) return new List<GitHubRepository>();
+            string url = "https://api.github.com/search/repositories?q=" +
+                Uri.EscapeDataString(query.Trim() + " in:name") + "&per_page=20";
+            return ParseGitHubRepositories(await GetGitHubApiJsonAsync(url));
+        }
+
+        private static List<GitHubRepository> ParseGitHubRepositories(string json)
+        {
+            using (JsonDocument document = JsonDocument.Parse(json))
+            {
+                JsonElement items;
+                if (!document.RootElement.TryGetProperty("items", out items) || items.ValueKind != JsonValueKind.Array)
+                    return new List<GitHubRepository>();
+
+                List<GitHubRepository> result = new List<GitHubRepository>();
+                foreach (JsonElement item in items.EnumerateArray())
+                {
+                    if (GetBool(item, "private")) continue;
+                    string fullName = GetString(item, "full_name").Trim();
+                    string pageUrl = GetString(item, "html_url").Trim();
+                    string[] components = fullName.Split('/');
+                    Uri parsedUrl;
+                    if (components.Length != 2 ||
+                        !Regex.IsMatch(components[0], "^[A-Za-z0-9_.-]+$") ||
+                        !Regex.IsMatch(components[1], "^[A-Za-z0-9_.-]+$") ||
+                        !Uri.TryCreate(pageUrl, UriKind.Absolute, out parsedUrl) ||
+                        parsedUrl.Scheme != Uri.UriSchemeHttps ||
+                        !string.Equals(parsedUrl.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
+                        !string.Equals(parsedUrl.AbsolutePath.Trim('/'), fullName, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    result.Add(new GitHubRepository
+                    {
+                        FullName = fullName,
+                        Name = components[1],
+                        Url = pageUrl
+                    });
+                }
+                return result;
+            }
+        }
+
+        private static int GetGitHubDependencySearchScore(GitHubRepository repository, string normalizedName)
+        {
+            if (repository == null || normalizedName.Length == 0) return 0;
+            string repositoryName = ModDependencyResolver.NormalizeName(repository.Name);
+            if (repositoryName.Length == 0) return 0;
+            if (repositoryName == normalizedName) return 2;
+            if (repositoryName.Contains(normalizedName) || normalizedName.Contains(repositoryName)) return 1;
+            return 0;
+        }
+
+        private static async Task<List<GitHubReleaseAsset>> GetGitHubReleaseAssetsAsync(string fullName)
+        {
+            if (string.IsNullOrWhiteSpace(fullName) ||
+                !Regex.IsMatch(fullName, "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))
+                throw new InvalidDataException("GitHub returned an invalid repository name.");
+
+            string url = "https://api.github.com/repos/" + fullName + "/releases?per_page=10";
+            return ParseGitHubReleaseAssets(await GetGitHubApiJsonAsync(url), fullName);
+        }
+
+        private static List<GitHubReleaseAsset> ParseGitHubReleaseAssets(string json, string fullName)
+        {
+            using (JsonDocument document = JsonDocument.Parse(json))
+            {
+                if (document.RootElement.ValueKind != JsonValueKind.Array)
+                    return new List<GitHubReleaseAsset>();
+
+                List<GitHubReleaseAsset> result = new List<GitHubReleaseAsset>();
+                foreach (JsonElement release in document.RootElement.EnumerateArray())
+                {
+                    if (GetBool(release, "draft")) continue;
+                    JsonElement assets;
+                    if (!release.TryGetProperty("assets", out assets) || assets.ValueKind != JsonValueKind.Array)
+                        continue;
+
+                    foreach (JsonElement asset in assets.EnumerateArray())
+                    {
+                        string name = GetString(asset, "name").Trim();
+                        string url = GetString(asset, "browser_download_url").Trim();
+                        string digest = GetString(asset, "digest").Trim();
+                        long size = GetLong(asset, "size");
+                        Uri parsedUrl;
+                        string expectedPathPrefix = "/" + fullName + "/releases/download/";
+                        if (string.IsNullOrWhiteSpace(name) ||
+                            !name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
+                            size <= 0 ||
+                            !Uri.TryCreate(url, UriKind.Absolute, out parsedUrl) ||
+                            parsedUrl.Scheme != Uri.UriSchemeHttps ||
+                            !string.Equals(parsedUrl.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
+                            !parsedUrl.AbsolutePath.StartsWith(expectedPathPrefix, StringComparison.OrdinalIgnoreCase) ||
+                            (!string.IsNullOrWhiteSpace(digest) && !Regex.IsMatch(digest, "^sha256:[0-9a-fA-F]{64}$")))
+                            continue;
+
+                        result.Add(new GitHubReleaseAsset
+                        {
+                            Repository = fullName,
+                            Name = name,
+                            Url = url,
+                            Digest = digest,
+                            Size = size
+                        });
+                    }
+                }
+                return result;
+            }
+        }
+
+        private static async Task<string> GetGitHubApiJsonAsync(string url)
+        {
+            Uri parsedUrl;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out parsedUrl) ||
+                parsedUrl.Scheme != Uri.UriSchemeHttps ||
+                !string.Equals(parsedUrl.Host, "api.github.com", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("A GitHub API request used an unexpected address.");
+
+            using (HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, parsedUrl))
+            using (CancellationTokenSource timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
+            {
+                request.Headers.Accept.ParseAdd("application/vnd.github+json");
+                request.Headers.Add("X-GitHub-Api-Version", "2026-03-10");
+                using (HttpResponseMessage response = await Http.SendAsync(
+                    request, HttpCompletionOption.ResponseHeadersRead, timeout.Token))
+                {
+                    response.EnsureSuccessStatusCode();
+                    return await response.Content.ReadAsStringAsync(timeout.Token);
+                }
+            }
+        }
+
+        private static async Task DownloadGitHubReleaseAssetAsync(
+            GitHubReleaseAsset asset,
+            string destination,
+            IProgress<string> progress)
+        {
+            Uri url;
+            if (asset == null ||
+                !Uri.TryCreate(asset.Url, UriKind.Absolute, out url) ||
+                url.Scheme != Uri.UriSchemeHttps ||
+                !string.Equals(url.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
+                !url.AbsolutePath.StartsWith("/" + asset.Repository + "/releases/download/", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("GitHub returned an unexpected release-download address.");
+
+            progress?.Report("Downloading from github.com...");
+            using (HttpResponseMessage response = await Http.GetAsync(asset.Url, HttpCompletionOption.ResponseHeadersRead))
+            {
+                response.EnsureSuccessStatusCode();
+                Uri finalUrl = response.RequestMessage == null ? null : response.RequestMessage.RequestUri;
+                if (finalUrl == null ||
+                    finalUrl.Scheme != Uri.UriSchemeHttps ||
+                    (!string.Equals(finalUrl.Host, "github.com", StringComparison.OrdinalIgnoreCase) &&
+                     !string.Equals(finalUrl.Host, "githubusercontent.com", StringComparison.OrdinalIgnoreCase) &&
+                     !finalUrl.Host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidDataException("GitHub redirected the release download to an unexpected host.");
+
+                long? responseSize = response.Content.Headers.ContentLength;
+                if (responseSize.HasValue && responseSize.Value != asset.Size)
+                    throw new InvalidDataException("The GitHub release file size did not match its API metadata.");
+
+                using (Stream input = await response.Content.ReadAsStreamAsync())
+                using (FileStream output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None))
+                    await input.CopyToAsync(output);
+            }
+
+            if (!File.Exists(destination) || new FileInfo(destination).Length != asset.Size)
+                throw new InvalidDataException("The GitHub release download was incomplete.");
+        }
+
+        private static void VerifyGitHubAssetSha256(string path, string expectedDigest)
+        {
+            if (string.IsNullOrWhiteSpace(expectedDigest)) return;
+            if (!Regex.IsMatch(expectedDigest, "^sha256:[0-9a-fA-F]{64}$"))
+                throw new InvalidDataException("GitHub returned an invalid release checksum.");
+
+            string expectedHash = expectedDigest.Substring("sha256:".Length);
+            string actualHash;
+            using (SHA256 sha256 = SHA256.Create())
+            using (FileStream stream = File.OpenRead(path))
+            {
+                StringBuilder value = new StringBuilder(64);
+                foreach (byte part in sha256.ComputeHash(stream))
+                    value.Append(part.ToString("x2", CultureInfo.InvariantCulture));
+                actualHash = value.ToString();
+            }
+            if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The GitHub release checksum did not match for " + Path.GetFileName(path) + ".");
         }
 
         private static void VerifyGameBananaFileHash(string path, string expectedMd5)
