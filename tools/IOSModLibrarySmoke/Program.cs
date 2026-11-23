@@ -264,40 +264,100 @@ internal static class Program
 
     private static async Task AuditLiveMapDependencyVersionsAsync()
     {
-        var requirements = new[]
+        string[] campaignRoots =
         {
-            new ModDependency { Name = "DashToggleHelper", Version = "0.11.0" },
-            new ModDependency { Name = "Etselec", Version = "2.5.1" },
-            new ModDependency { Name = "HooliganHelper", Version = "0.1.0" },
-            new ModDependency { Name = "AletrisSandbox", Version = "0.1.0" },
-            new ModDependency { Name = "BGswitch", Version = "0.1.0" },
-            new ModDependency { Name = "DzhakeHelper", Version = "0.3" },
-            new ModDependency { Name = "TheSecretOfCelesteMountain", Version = "2.1.2" },
-            new ModDependency { Name = "TheSecretOfCelesteMountain", Version = "2.0.1" },
-            new ModDependency { Name = "LuaCutscenes", Version = "0.3.0" }
+            "Glyph",
+            "Into The Jungle",
+            "StrawberryJam2021",
+            "SecretSantaCollab2024",
+            "SecretSantaCollab2025",
+            "Even More Legally Distinct Secret Santa",
+            "CrossoverCollab"
         };
-        var catalog = (System.Collections.IDictionary)await InvokePrivateAsync("DownloadUpdateCatalogAsync");
-        int resolved = 0;
-        foreach (ModDependency dependency in requirements)
+
+        Func<string, Task<string>> getSmallText = async url =>
+            (string)await InvokePrivateAsync("GetSmallTextAsync", url);
+        ModDependencyResolver graph = await ModDependencyResolver.DownloadEverestGraphAsync(getSmallText, null);
+        Require(graph.IsAvailable, "Everest's current dependency graph could not be loaded.");
+
+        FieldInfo graphField = typeof(ModDependencyResolver).GetField("graph", BindingFlags.NonPublic | BindingFlags.Instance);
+        Require(graphField != null, "The dependency graph index is unavailable to the live audit.");
+        var graphEntries = (System.Collections.IDictionary)graphField.GetValue(graph);
+        var allRootDependencies = new List<ModDependency>();
+        var failures = new List<string>();
+        int optionalDependencyEdges = 0;
+
+        foreach (string campaignRoot in campaignRoots)
         {
+            string normalizedRoot = ModDependencyResolver.NormalizeName(campaignRoot);
+            string[] graphNames = graphEntries.Keys.Cast<string>()
+                .Where(name => ModDependencyResolver.NormalizeName(name) == normalizedRoot)
+                .ToArray();
+            if (graphNames.Length != 1)
+            {
+                failures.Add(campaignRoot + ": expected one Everest graph entry, found " + graphNames.Length + ".");
+                continue;
+            }
+
+            List<ModDependency> direct = new List<ModDependency>();
+            List<ModDependency> optional = new List<ModDependency>();
+            graph.ApplyTo(graphNames[0], direct, optional);
+            IReadOnlyList<ModDependency> closure = graph.ResolveRequiredClosure(direct);
+            optionalDependencyEdges += optional.Count;
+            allRootDependencies.AddRange(direct);
+            Console.WriteLine("ROOT " + graphNames[0] + ": " + direct.Count + " direct required, " +
+                closure.Count + " transitive required, " + optional.Count + " optional.");
+        }
+
+        Require(failures.Count == 0, "One or more requested campaigns are missing from Everest's graph: " + string.Join(" | ", failures));
+        List<ModDependency> requiredClosure = graph.ResolveRequiredClosure(allRootDependencies).ToList();
+        System.Collections.IDictionary catalog =
+            (System.Collections.IDictionary)await InvokePrivateAsync("DownloadUpdateCatalogAsync");
+        int builtInCount = 0;
+        int verifiedCatalogCount = 0;
+        int historicalFallbackCount = 0;
+
+        foreach (ModDependency dependency in requiredClosure)
+        {
+            if ((bool)InvokePrivate("IsBuiltInDependency", dependency.Name))
+            {
+                if (!(bool)InvokePrivate("IsBuiltInDependencySatisfied", dependency))
+                    failures.Add(dependency.Name + " " + dependency.Version + ": the bundled game/Everest version is too old.");
+                else
+                    builtInCount++;
+                continue;
+            }
+
+            object update = FindCatalogUpdate(catalog, dependency.Name);
+            string latest = update == null ? null : GetField<string>(update, "Version");
+            string url = update == null ? null : GetField<string>(update, "Url");
+            string mirror = update == null ? null : GetField<string>(update, "MirrorName");
+            List<string> hashes = update == null ? null : GetField<List<string>>(update, "Hashes");
+            bool hasHttpsUrl = Uri.TryCreate(url, UriKind.Absolute, out Uri parsedUrl) && parsedUrl.Scheme == Uri.UriSchemeHttps;
+            bool hasVerifiedSource = hashes != null && hashes.Count > 0 && (hasHttpsUrl || !string.IsNullOrWhiteSpace(mirror));
+            bool catalogSatisfies = update != null && !string.IsNullOrWhiteSpace(latest) &&
+                (bool)InvokePrivate("VersionSatisfies", dependency.Version, latest);
+
+            if (hasVerifiedSource && catalogSatisfies)
+            {
+                verifiedCatalogCount++;
+                continue;
+            }
+
             string path = Path.Combine(Path.GetTempPath(), "celeste-ios-map-version-" + Guid.NewGuid().ToString("N") + ".zip");
             try
             {
-                object update = catalog[dependency.Name];
-                string latest = update == null ? "unlisted" : GetField<string>(update, "Version");
-                bool latestSatisfies = update != null && (bool)InvokePrivate("VersionSatisfies", dependency.Version, latest);
                 object package = await InvokePrivateAsync("DownloadDependencyFromGameBananaAsync", dependency, path, null);
                 object module = InvokePrivate("FindModule", package, dependency.Name);
                 string installed = module == null ? "missing" : GetProperty<string>(module, "Version");
                 Require(module != null && (bool)InvokePrivate("VersionSatisfies", dependency.Version, installed),
-                    "The downloaded historical release should satisfy " + dependency.Name + " " + dependency.Version + ".");
-                resolved++;
-                Console.WriteLine("PASS historical " + dependency.Name + " " + dependency.Version +
-                    " (catalog " + latest + (latestSatisfies ? " compatible" : "; historical " + installed) + ")");
+                    "No archived package satisfies " + dependency.Name + " " + dependency.Version + ".");
+                historicalFallbackCount++;
             }
             catch (Exception exception)
             {
-                Console.WriteLine("UNRESOLVED " + dependency.Name + " " + dependency.Version + ": " + exception);
+                string reason = exception.GetBaseException().Message;
+                failures.Add(dependency.Name + " " + dependency.Version + ": " + reason);
             }
             finally
             {
@@ -305,7 +365,30 @@ internal static class Program
             }
         }
 
-        Console.WriteLine("Historical map dependency audit resolved " + resolved + "/" + requirements.Length + ".");
+        Console.WriteLine("Required packages: " + requiredClosure.Count + "; built in: " + builtInCount +
+            "; current verified catalog versions: " + verifiedCatalogCount + "; archived fallbacks downloaded: " +
+            historicalFallbackCount + "; optional edges retained: " + optionalDependencyEdges + ".");
+        if (failures.Count != 0)
+        {
+            foreach (string failure in failures)
+                Console.WriteLine("UNRESOLVED " + failure);
+            throw new InvalidOperationException("Everest's live campaign dependency audit has " + failures.Count + " unresolved requirement(s).");
+        }
+
+        Console.WriteLine("PASS live Everest campaign graph and dependency catalog audit.");
+    }
+
+    private static object FindCatalogUpdate(System.Collections.IDictionary catalog, string moduleName)
+    {
+        if (catalog.Contains(moduleName)) return catalog[moduleName];
+        string normalized = ModDependencyResolver.NormalizeName(moduleName);
+        if (normalized.Length == 0) return null;
+        List<object> matches = catalog.Keys.Cast<object>()
+            .Where(key => key is string name && ModDependencyResolver.NormalizeName(name) == normalized)
+            .Select(key => catalog[key])
+            .Where(value => value != null)
+            .ToList();
+        return matches.Count == 1 ? matches[0] : null;
     }
 
     private static async Task VerifyLiveDependencyAsync(ModDependency dependency)
