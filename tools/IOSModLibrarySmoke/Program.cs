@@ -10,6 +10,7 @@ internal static class Program
     {
         VerifyNormalizedNames();
         VerifyGameBananaCandidateRanking();
+        VerifyDependencySearchQueryVariants();
         VerifyEverestVersionCompatibility();
         VerifyUniqueModuleAlias();
         VerifyAmbiguousModuleAliasIsRejected();
@@ -27,7 +28,7 @@ internal static class Program
 
     private static void VerifyGameBananaCandidateRanking()
     {
-        Type candidateType = typeof(IOSModLibrary).GetNestedType("CatalogMod", BindingFlags.NonPublic);
+        Type candidateType = typeof(IOSModLibrary).Assembly.GetType("celestemeow.CatalogMod", throwOnError: true);
         object exact = Activator.CreateInstance(candidateType, nonPublic: true);
         SetProperty(candidateType, exact, "Name", "Needle Helper");
         int exactScore = (int)InvokePrivate("GetDependencySearchScore", exact, "NEEDLEHELPER");
@@ -37,6 +38,21 @@ internal static class Program
         SetProperty(candidateType, unrelated, "Name", "Other Helper");
         int unrelatedScore = (int)InvokePrivate("GetDependencySearchScore", unrelated, "NEEDLEHELPER");
         Require(unrelatedScore == 0, "An unrelated GameBanana result should not receive an alias score.");
+    }
+
+    private static void VerifyDependencySearchQueryVariants()
+    {
+        List<string> memeQueries = (List<string>)InvokePrivate("GetDependencySearchQueries", "MemeSides");
+        Require(memeQueries.Contains("Meme Sides"),
+            "PascalCase dependency names should also search their spaced GameBanana display title.");
+
+        List<string> kirbyQueries = (List<string>)InvokePrivate("GetDependencySearchQueries", "KirbyHelperMechanics");
+        Require(kirbyQueries.Contains("Kirby Helper Mechanics"),
+            "Long PascalCase dependency names should split into readable search terms.");
+
+        List<string> punctuatedQueries = (List<string>)InvokePrivate("GetDependencySearchQueries", "Needle-Helper");
+        Require(punctuatedQueries.Contains("Needle Helper"),
+            "Punctuation-separated dependency names should search their readable title.");
     }
 
     private static void VerifyEverestVersionCompatibility()

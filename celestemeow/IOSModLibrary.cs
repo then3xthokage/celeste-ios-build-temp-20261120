@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using YamlDotNet.Serialization;
@@ -650,17 +651,24 @@ namespace celestemeow
             string tempPath,
             IProgress<string> progress)
         {
-            List<CatalogMod> searchResults;
-            try
+            List<CatalogMod> searchResults = new List<CatalogMod>();
+            Exception lastSearchError = null;
+            foreach (string query in GetDependencySearchQueries(dependency.Name))
             {
-                searchResults = await SearchCatalogAsync(dependency.Name);
+                try
+                {
+                    searchResults.AddRange(await SearchCatalogAsync(query));
+                }
+                catch (Exception exception)
+                {
+                    lastSearchError = exception;
+                }
             }
-            catch (Exception exception)
-            {
+
+            if (searchResults.Count == 0 && lastSearchError != null)
                 throw new IOException(
                     "Everest has no verified download for " + dependency.Name + ", and GameBanana search is unavailable.",
-                    exception);
-            }
+                    lastSearchError);
 
             string normalizedName = ModDependencyResolver.NormalizeName(dependency.Name);
             List<CatalogMod> candidates = searchResults
@@ -721,6 +729,27 @@ namespace celestemeow
             throw new FileNotFoundException(
                 "No GameBanana package found a compatible " + dependency.Name + " module after checking " + candidates.Count + " candidate(s).",
                 lastError);
+        }
+
+        private static List<string> GetDependencySearchQueries(string dependencyName)
+        {
+            List<string> queries = new List<string>();
+            Action<string> add = query =>
+            {
+                string trimmed = (query ?? "").Trim();
+                if (trimmed.Length > 0 && !queries.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+                    queries.Add(trimmed);
+            };
+
+            string name = (dependencyName ?? "").Trim();
+            add(name);
+            string separated = name.Replace('_', ' ').Replace('-', ' ').Replace('.', ' ');
+            separated = Regex.Replace(separated, @"(?<=[a-z0-9])(?=[A-Z])", " ");
+            separated = Regex.Replace(separated, @"(?<=[A-Z])(?=[A-Z][a-z])", " ");
+            separated = Regex.Replace(separated, @"\s+", " ").Trim();
+            add(separated);
+            add(ModDependencyResolver.NormalizeName(name));
+            return queries;
         }
 
         private static int GetDependencySearchScore(CatalogMod candidate, string normalizedName)
