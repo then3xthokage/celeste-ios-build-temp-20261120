@@ -27,6 +27,8 @@ public static class RuntimeProbe
         VerifyRuntimeCodeGeneration();
         Mark("Cecil generated method probe");
         VerifyCecilGeneratedMethod();
+        Mark("unsafe IL opcode probe");
+        VerifyUnsafeILInstructions();
 
         Mark("read and weave hook fixture");
         using Stream fixtureResource = Assembly.GetExecutingAssembly().GetManifestResourceStream("ProbeFixture.dll");
@@ -363,6 +365,38 @@ public static class RuntimeProbe
         dmd.GetILGenerator().Emit(System.Reflection.Emit.OpCodes.Ldc_I4, 42);
         dmd.GetILGenerator().Emit(System.Reflection.Emit.OpCodes.Ret);
         AssertEqual("MonoMod Cecil generated method", 42, dmd.Generate().Invoke(null, null));
+    }
+
+    private static void VerifyUnsafeILInstructions()
+    {
+        Switches.SetSwitchValue("DMDType", "cecil");
+        using DynamicMethodDefinition dmd = new DynamicMethodDefinition("ios_interpreter_localloc_cpblk_smoke", typeof(int), Type.EmptyTypes);
+        ILGenerator il = dmd.GetILGenerator();
+        LocalBuilder source = il.DeclareLocal(typeof(IntPtr));
+        LocalBuilder destination = il.DeclareLocal(typeof(IntPtr));
+
+        il.Emit(OpCodes.Ldc_I4, 8);
+        il.Emit(OpCodes.Conv_U);
+        il.Emit(OpCodes.Localloc);
+        il.Emit(OpCodes.Stloc, source);
+        il.Emit(OpCodes.Ldc_I4, 8);
+        il.Emit(OpCodes.Conv_U);
+        il.Emit(OpCodes.Localloc);
+        il.Emit(OpCodes.Stloc, destination);
+
+        il.Emit(OpCodes.Ldloc, source);
+        il.Emit(OpCodes.Ldc_I4, 0x12345678);
+        il.Emit(OpCodes.Stind_I4);
+        il.Emit(OpCodes.Ldloc, destination);
+        il.Emit(OpCodes.Ldloc, source);
+        il.Emit(OpCodes.Ldc_I4, 4);
+        il.Emit(OpCodes.Cpblk);
+        il.Emit(OpCodes.Ldloc, destination);
+        il.Emit(OpCodes.Ldind_I4);
+        il.Emit(OpCodes.Ret);
+
+        AssertEqual("MonoMod Cecil localloc/cpblk on iOS interpreter", 0x12345678,
+            dmd.Generate().Invoke(null, null));
     }
 
     private static void VerifyRuntimeCodeGeneration()
