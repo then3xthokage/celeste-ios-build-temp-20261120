@@ -6,7 +6,7 @@ namespace IOSModLibrarySmoke;
 
 internal static class Program
 {
-    private static int Main()
+    private static async Task<int> Main(string[] args)
     {
         VerifyNormalizedNames();
         VerifyGameBananaCandidateRanking();
@@ -18,6 +18,8 @@ internal static class Program
         VerifyAmbiguousModuleAliasIsRejected();
         VerifyEverestDummyModuleFallbackKeepsCampaignMaps();
         VerifyEmptyManifestVersionUsesEverestFallback();
+        if (args.Contains("--live-gamebanana", StringComparer.OrdinalIgnoreCase))
+            await VerifyLiveGameBananaDependencyAsync();
         Console.WriteLine("PASS iOS mod dependency and map-package smoke checks");
         return 0;
     }
@@ -88,6 +90,32 @@ internal static class Program
             try { InvokePrivate("VerifyGameBananaFileHash", path, "00000000000000000000000000000000"); }
             catch (TargetInvocationException exception) when (exception.InnerException is InvalidDataException) { rejected = true; }
             Require(rejected, "A GameBanana file with a mismatched checksum must be rejected.");
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    private static async Task VerifyLiveGameBananaDependencyAsync()
+    {
+        var candidates = (System.Collections.IList)await InvokePrivateAsync("SearchGameBananaCatalogAsync", "Needle Helper");
+        object candidate = candidates.Cast<object>()
+            .FirstOrDefault(item => GetProperty<long>(item, "GameBananaId") == 53748);
+        Require(candidate != null, "The live GameBanana search should find Cursed Needle Helper.");
+
+        string path = Path.Combine(Path.GetTempPath(), "celeste-ios-live-dependency-" + Guid.NewGuid().ToString("N") + ".zip");
+        try
+        {
+            object package = await InvokePrivateAsync(
+                "DownloadDependencyFromGameBananaItemAsync",
+                candidate,
+                new ModDependency { Name = "NeedleHelper", Version = "1.0.0" },
+                path,
+                null);
+            object module = InvokePrivate("FindModule", package, "NeedleHelper");
+            Require(module != null && GetProperty<string>(module, "Name") == "Needle Helper",
+                "The live package should pass exact Everest module and version verification.");
         }
         finally
         {
@@ -180,6 +208,15 @@ internal static class Program
         MethodInfo method = typeof(IOSModLibrary).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static);
         if (method == null) throw new InvalidOperationException("Missing private method " + name + ".");
         return method.Invoke(null, arguments);
+    }
+
+    private static async Task<object> InvokePrivateAsync(string name, params object[] arguments)
+    {
+        MethodInfo method = typeof(IOSModLibrary).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static);
+        if (method == null) throw new InvalidOperationException("Missing private method " + name + ".");
+        Task task = (Task)method.Invoke(null, arguments);
+        await task;
+        return task.GetType().GetProperty("Result").GetValue(task);
     }
 
     private static void SetProperty(Type type, object instance, string name, object value)
