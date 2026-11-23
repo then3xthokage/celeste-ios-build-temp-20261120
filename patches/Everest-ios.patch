@@ -187,7 +187,7 @@ index ec688e99..5dac4177 100755
  
          public CompressedHttpClient() : base(handler, disposeHandler: false) {
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
-index b82f6efc..69717b6f 100644
+index b82f6efc..b0c4f1cb 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
 @@ -33,9 +33,20 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
@@ -400,19 +400,8 @@ index b82f6efc..69717b6f 100644
 +
              if (signature == null)
                  signature = Target;
-@@ -295,4 +413,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-                 throw new InvalidOperationException($"Type {typeof(T)} not a delegate type.");
- 
-+            if (_iosHook) {
-+                Func<MethodBase, object, Type, Delegate> create = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.CreateDetourTrampoline") as Func<MethodBase, object, Type, Delegate>;
-+                if (create == null) throw new InvalidOperationException("The iOS detour trampoline backend is not available.");
-+                return (T) create(Method, _iosHookOwner ?? (object) this, typeof(T));
-+            }
-+
-             return GenerateTrampoline(typeof(T).GetMethod("Invoke")).CreateDelegate(typeof(T)) as T;
-         }
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
-index 5ab6d3d7..27f82952 100644
+index 5ab6d3d7..e720df8b 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
 @@ -26,6 +26,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
@@ -532,18 +521,6 @@ index 5ab6d3d7..27f82952 100644
 +
          private void _Free() {
              _RefTargetCell?.Dispose();
-@@ -253,4 +330,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-                 throw new InvalidOperationException($"Type {typeof(T)} not a delegate type.");
- 
-+            if (_iosHook) {
-+                Func<MethodBase, object, Type, Delegate> create = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.CreateDetourTrampoline") as Func<MethodBase, object, Type, Delegate>;
-+                if (create == null)
-+                    throw new InvalidOperationException("The iOS managed trampoline backend is not available.");
-+                return (T) create(Method, this, typeof(T));
-+            }
-+
-             return GenerateTrampoline(typeof(T).GetMethod("Invoke")).CreateDelegate(typeof(T)) as T;
-         }
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
 index 15b1c509..99c02240 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs

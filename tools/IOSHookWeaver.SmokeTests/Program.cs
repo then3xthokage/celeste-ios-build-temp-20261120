@@ -16,6 +16,8 @@ using MonoMod.Cil;
 
 internal static class Program
 {
+    private static MethodBase legacyTrampolineOverride;
+
     private static int Main(string[] args)
     {
         VerifyBundledRuntimeAssemblyResolver();
@@ -839,6 +841,25 @@ internal static class Program
                 defaultTrampoline.CreateDelegate(originalDelegateType)
                     .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
 
+            FieldInfo callbackField = legacyDetourType.GetField("OnGenerateTrampoline", BindingFlags.Public | BindingFlags.Static)
+                ?? throw new MissingFieldException(legacyDetourType.FullName, "OnGenerateTrampoline");
+            MethodBase overrideMethod = targetType.GetMethod("TrampolineOverride", BindingFlags.Public | BindingFlags.Static)
+                ?? throw new MissingMethodException(targetType.FullName, "TrampolineOverride");
+            legacyTrampolineOverride = overrideMethod;
+            try
+            {
+                callbackField.SetValue(null, CreateTrampolineOverrideCallback(callbackField.FieldType));
+                Delegate callbackTrampoline = (Delegate)generateTrampoline.MakeGenericMethod(originalDelegateType)
+                    .Invoke(detour, null);
+                AssertEqual("Everest GenerateTrampoline<T> preserves OnGenerateTrampoline callback", "907",
+                    callbackTrampoline.DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+            }
+            finally
+            {
+                callbackField.SetValue(null, null);
+                legacyTrampolineOverride = null;
+            }
+
         }
         finally
         {
@@ -947,6 +968,26 @@ internal static class Program
             AssertEqual("Everest LegacyHook default MethodBase trampoline", "7",
                 defaultTrampoline.CreateDelegate(originalDelegateType)
                     .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+
+            FieldInfo callbackField = legacyHookType.GetField("OnGenerateTrampoline", BindingFlags.Public | BindingFlags.Static)
+                ?? throw new MissingFieldException(legacyHookType.FullName, "OnGenerateTrampoline");
+            MethodBase overrideMethod = targetType.GetMethod("TrampolineOverride", BindingFlags.Public | BindingFlags.Static)
+                ?? throw new MissingMethodException(targetType.FullName, "TrampolineOverride");
+            legacyTrampolineOverride = overrideMethod;
+            try
+            {
+                callbackField.SetValue(null, CreateTrampolineOverrideCallback(callbackField.FieldType));
+                Delegate callbackTrampoline = (Delegate)legacyHookType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                    .Single(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition && method.GetParameters().Length == 0)
+                    .MakeGenericMethod(originalDelegateType).Invoke(hook, null);
+                AssertEqual("Everest LegacyHook GenerateTrampoline<T> preserves OnGenerateTrampoline callback", "907",
+                    callbackTrampoline.DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+            }
+            finally
+            {
+                callbackField.SetValue(null, null);
+                legacyTrampolineOverride = null;
+            }
 
             detour.GetType().GetMethod("Undo", BindingFlags.Public | BindingFlags.Instance).Invoke(detour, null);
             if ((bool)legacyHookType.GetProperty("IsApplied").GetValue(hook))
@@ -1314,6 +1355,17 @@ CycleB:
         if (expected != actual)
             throw new InvalidOperationException(label + " expected " + expected + " but observed " + actual + ".");
     }
+
+    private static Delegate CreateTrampolineOverrideCallback(Type callbackType)
+    {
+        Type identityType = callbackType.GetGenericArguments()[0];
+        MethodInfo callback = typeof(Program).GetMethod(nameof(ReturnTrampolineOverride), BindingFlags.NonPublic | BindingFlags.Static)
+            .MakeGenericMethod(identityType);
+        return Delegate.CreateDelegate(callbackType, callback, throwOnBindFailure: true);
+    }
+
+    private static MethodBase ReturnTrampolineOverride<TIdentity>(TIdentity identity, MethodBase signature) =>
+        legacyTrampolineOverride;
 
     private static Delegate Register(MethodInfo target, Assembly hookAssembly, string hookMethodName, string hookDelegateName)
     {

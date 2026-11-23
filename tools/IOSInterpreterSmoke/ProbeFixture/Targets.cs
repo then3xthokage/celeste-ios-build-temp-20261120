@@ -41,6 +41,7 @@ public static class ProbeTarget
 {
     public static int Add(int left, int right) => left + right;
     public static int DetourAdd(int left, int right) => left + right + 100;
+    public static int TrampolineOverride(int left, int right) => left + right + 900;
     public static int DetourAddTwenty(int left, int right) => left + right + 20;
     public static int DetourAddHundred(int left, int right) => left + right + 100;
     public static int Constant() => 5;

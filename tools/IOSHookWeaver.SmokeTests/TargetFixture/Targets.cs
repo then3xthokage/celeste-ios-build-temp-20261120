@@ -123,6 +123,9 @@ public sealed class LegacyDetourTarget
         return target.Value;
     }
 
+    public static int TrampolineOverride(LegacyDetourTarget target, int amount) =>
+        target.Value + amount + 900;
+
     public static int DetourAddTwenty(LegacyDetourTarget target, int amount) =>
         target.Value + amount + 20;
 

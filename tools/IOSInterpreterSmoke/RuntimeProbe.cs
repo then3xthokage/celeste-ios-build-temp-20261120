@@ -193,6 +193,23 @@ public static class RuntimeProbe
                 legacyDetour, new object[] { null });
             AssertEqual("Everest GenerateTrampoline() default signature", 10,
                 defaultMethodTrampoline.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
+
+            Mark("LegacyDetour generic trampoline preserves OnGenerateTrampoline callback on iOS interpreter");
+            MethodInfo trampolineOverride = targetType.GetMethod("TrampolineOverride", BindingFlags.Public | BindingFlags.Static)
+                ?? throw new MissingMethodException(targetType.FullName, "TrampolineOverride");
+            Celeste.Mod.Helpers.LegacyMonoMod.LegacyDetour.OnGenerateTrampoline =
+                (owner, signature) => trampolineOverride;
+            try
+            {
+                Delegate callbackTrampoline = (Delegate)legacyTrampolineFactory.MakeGenericMethod(trampolineType)
+                    .Invoke(legacyDetour, null);
+                AssertEqual("LegacyDetour generic OnGenerateTrampoline callback", 910,
+                    callbackTrampoline.DynamicInvoke(new object[] { 6, 4 }));
+            }
+            finally
+            {
+                Celeste.Mod.Helpers.LegacyMonoMod.LegacyDetour.OnGenerateTrampoline = null;
+            }
         }
         finally
         {
@@ -279,6 +296,25 @@ public static class RuntimeProbe
                 legacyHook, new object[] { null });
             AssertEqual("Everest LegacyHook default MethodBase trampoline", 10,
                 hookDefaultMethodTrampoline.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
+
+            Mark("LegacyHook generic trampoline preserves OnGenerateTrampoline callback on iOS interpreter");
+            MethodInfo legacyHookTrampolineFactory = legacyHookType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .SingleOrDefault(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition &&
+                    method.GetGenericArguments().Length == 1 && method.GetParameters().Length == 0)
+                ?? throw new MissingMethodException(legacyHookType.FullName, "GenerateTrampoline<T>()");
+            Celeste.Mod.Helpers.LegacyMonoMod.LegacyHook.OnGenerateTrampoline =
+                (owner, signature) => trampolineOverride;
+            try
+            {
+                Delegate callbackHookTrampoline = (Delegate)legacyHookTrampolineFactory.MakeGenericMethod(trampolineType)
+                    .Invoke(legacyHook, null);
+                AssertEqual("LegacyHook generic OnGenerateTrampoline callback", 910,
+                    callbackHookTrampoline.DynamicInvoke(new object[] { 6, 4 }));
+            }
+            finally
+            {
+                Celeste.Mod.Helpers.LegacyMonoMod.LegacyHook.OnGenerateTrampoline = null;
+            }
 
             Mark("Everest public LegacyHook: undo Detour facade");
             hookDetour.GetType().GetMethod("Undo", BindingFlags.Public | BindingFlags.Instance)
