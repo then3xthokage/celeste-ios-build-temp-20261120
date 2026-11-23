@@ -17,7 +17,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    if: github.ref == 'refs/heads/celeste-ios-build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Apply iOS Everest hook integration
+        run: git -C Everest apply ../patches/Everest-ios.patch
+
+      - name: Initialize Everest build dependencies
+        run: git -C Everest submodule update --init --recursive
+
+      - name: Apply the iOS MonoMod runtime fix
+        run: git -C Everest/external/MonoMod apply ../../../patches/MonoMod-ios.patch
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            8.0.428
+            9.0.x
+            11.0.100
+
+      - name: Run typed hook compatibility smoke tests
+        working-directory: ${{ runner.temp }}
+        run: dotnet run --configuration Release --project "$GITHUB_WORKSPACE/tools/IOSHookWeaver.SmokeTests/IOSHookWeaver.SmokeTests.csproj"
+
+      - name: Run iOS mod dependency smoke tests
+        working-directory: ${{ runner.temp }}
+        run: dotnet run --configuration Release --project "$GITHUB_WORKSPACE/tools/IOSModLibrarySmoke/IOSModLibrarySmoke.csproj"
+
   build:
+    needs: verify
     if: github.ref == 'refs/heads/celeste-ios-build'
     runs-on: macos-26
     timeout-minutes: 240
@@ -50,14 +84,6 @@ jobs:
             brew install mono
           fi
           command -v sn
-
-      - name: Run typed hook compatibility smoke tests
-        working-directory: ${{ runner.temp }}
-        run: dotnet run --configuration Release --project "$GITHUB_WORKSPACE/tools/IOSHookWeaver.SmokeTests/IOSHookWeaver.SmokeTests.csproj"
-
-      - name: Run iOS mod dependency smoke tests
-        working-directory: ${{ runner.temp }}
-        run: dotnet run --configuration Release --project "$GITHUB_WORKSPACE/tools/IOSModLibrarySmoke/IOSModLibrarySmoke.csproj"
 
       - name: Check required private secrets
         shell: bash
