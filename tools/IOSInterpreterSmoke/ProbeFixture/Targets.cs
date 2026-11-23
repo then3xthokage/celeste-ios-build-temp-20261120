@@ -123,6 +123,35 @@ public static class ProbeEverestStyleConstructorHooks
     }
 }
 
+public sealed class ProbeOuiUpdateStatsTarget
+{
+    public int OriginalCalls;
+    public int PostCalls;
+    public bool ChapterMode;
+    public bool? HeartWiggle;
+    public bool? SideMode;
+    public bool? OverrideHeartWiggle;
+    public static int DetourCalls;
+    public static Action<ProbeOuiUpdateStatsTarget, bool, bool?, bool?, bool?> Original;
+
+    public void UpdateStats(bool chapterMode, bool? heartWiggle, bool? sideMode, bool? overrideHeartWiggle)
+    {
+        OriginalCalls++;
+        ChapterMode = chapterMode;
+        HeartWiggle = heartWiggle;
+        SideMode = sideMode;
+        OverrideHeartWiggle = overrideHeartWiggle;
+    }
+
+    public static void DetourUpdateStats(ProbeOuiUpdateStatsTarget target, bool chapterMode,
+        bool? heartWiggle, bool? sideMode, bool? overrideHeartWiggle)
+    {
+        DetourCalls++;
+        Original(target, chapterMode, heartWiggle, sideMode, overrideHeartWiggle);
+        target.PostCalls++;
+    }
+}
+
 public static class ProbeGenericTypeTarget<T>
 {
     public static string GenericTypeConstant() => "original-open-type";

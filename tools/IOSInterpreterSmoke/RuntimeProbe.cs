@@ -161,16 +161,16 @@ public static class RuntimeProbe
         ConstructorInfo legacyConstructor = legacyDetourType.GetConstructor(new[] { typeof(MethodBase), typeof(MethodBase) });
         if (legacyConstructor == null)
             throw new MissingMethodException(legacyDetourType.FullName, ".ctor(MethodBase, MethodBase)");
+        MethodInfo legacyTrampolineFactory = legacyDetourType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .SingleOrDefault(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition &&
+                method.GetGenericArguments().Length == 1 && method.GetParameters().Length == 0);
+        if (legacyTrampolineFactory == null)
+            throw new MissingMethodException(legacyDetourType.FullName, "GenerateTrampoline<T>()");
         object legacyDetour = legacyConstructor.Invoke(new object[] {
             add, targetType.GetMethod("DetourAdd", BindingFlags.Public | BindingFlags.Static) });
         try
         {
             AssertEqual("Everest LegacyDetour public route", 110, add.Invoke(null, new object[] { 6, 4 }));
-            MethodInfo legacyTrampolineFactory = legacyDetourType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                .SingleOrDefault(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition &&
-                    method.GetGenericArguments().Length == 1 && method.GetParameters().Length == 0);
-            if (legacyTrampolineFactory == null)
-                throw new MissingMethodException(legacyDetourType.FullName, "GenerateTrampoline<T>()");
             Delegate legacyTrampoline = (Delegate)legacyTrampolineFactory.MakeGenericMethod(trampolineType)
                 .Invoke(legacyDetour, null);
             AssertEqual("Everest GenerateTrampoline<T> continuation", 10,
@@ -182,6 +182,50 @@ public static class RuntimeProbe
                 .Invoke(legacyDetour, null);
         }
         AssertEqual("Everest LegacyDetour removal", 10, add.Invoke(null, new object[] { 6, 4 }));
+
+        Mark("QuickieMountain2 instance detour trampoline signature on iOS interpreter");
+        Type updateStatsTargetType = fixture.GetType("ProbeOuiUpdateStatsTarget", throwOnError: true);
+        MethodInfo updateStats = updateStatsTargetType.GetMethod("UpdateStats", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new MissingMethodException(updateStatsTargetType.FullName, "UpdateStats");
+        MethodInfo detourUpdateStats = updateStatsTargetType.GetMethod("DetourUpdateStats", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new MissingMethodException(updateStatsTargetType.FullName, "DetourUpdateStats");
+        ConstructorInfo legacyDetourConstructor = legacyDetourType.GetConstructor(new[] { typeof(MethodBase), typeof(MethodBase) })
+            ?? throw new MissingMethodException(legacyDetourType.FullName, ".ctor(MethodBase, MethodBase)");
+        object updateStatsDetour = legacyDetourConstructor.Invoke(new object[] { updateStats, detourUpdateStats });
+        Type quickieTrampolineType = typeof(Action<,,,,>).MakeGenericType(
+            updateStatsTargetType, typeof(bool), typeof(bool?), typeof(bool?), typeof(bool?));
+        try
+        {
+            Delegate quickieTrampoline = (Delegate)legacyTrampolineFactory
+                .MakeGenericMethod(quickieTrampolineType).Invoke(updateStatsDetour, null);
+            updateStatsTargetType.GetField("Original", BindingFlags.Public | BindingFlags.Static)
+                .SetValue(null, quickieTrampoline);
+            object panel = Activator.CreateInstance(updateStatsTargetType);
+            updateStats.Invoke(panel, new object[] { true, null, false, true });
+            AssertEqual("QuickieMountain2 public detour callback", 1,
+                updateStatsTargetType.GetField("DetourCalls").GetValue(null));
+            AssertEqual("QuickieMountain2 original method continuation", 1,
+                updateStatsTargetType.GetField("OriginalCalls").GetValue(panel));
+            AssertEqual("QuickieMountain2 detour post-call", 1,
+                updateStatsTargetType.GetField("PostCalls").GetValue(panel));
+            if (!(bool)updateStatsTargetType.GetField("ChapterMode").GetValue(panel) ||
+                updateStatsTargetType.GetField("HeartWiggle").GetValue(panel) != null ||
+                !Equals(updateStatsTargetType.GetField("SideMode").GetValue(panel), false) ||
+                !Equals(updateStatsTargetType.GetField("OverrideHeartWiggle").GetValue(panel), true))
+                throw new InvalidOperationException("QuickieMountain2's Action<OuiChapterPanel, bool, bool?, bool?, bool?> arguments changed in the trampoline.");
+        }
+        finally
+        {
+            legacyDetourType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+                ?.Invoke(updateStatsDetour, null);
+            updateStatsTargetType.GetField("Original", BindingFlags.Public | BindingFlags.Static).SetValue(null, null);
+        }
+        object unhookedPanel = Activator.CreateInstance(updateStatsTargetType);
+        updateStats.Invoke(unhookedPanel, new object[] { false, true, null, false });
+        AssertEqual("QuickieMountain2 detour removal preserves original method", 1,
+            updateStatsTargetType.GetField("OriginalCalls").GetValue(unhookedPanel));
+        AssertEqual("QuickieMountain2 detour removal leaves callback inactive", 1,
+            updateStatsTargetType.GetField("DetourCalls").GetValue(null));
 
         Mark("ILContext hook and removal");
         MethodInfo constant = targetType.GetMethod("Constant", BindingFlags.Public | BindingFlags.Static);
