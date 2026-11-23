@@ -460,9 +460,21 @@ namespace celestemeow
             }
         }
 
-        public void GameDidReturn()
+        public void GameDidReturn(bool restartRequested)
         {
             if (currentPage == "installed") ShowInstalled();
+            if (restartRequested)
+            {
+                playButton.Enabled = false;
+                SetStatus("Dependencies installed. Close and reopen Celeste to load them.");
+                UIAlertController alert = UIAlertController.Create(
+                    "Restart Celeste",
+                    "Everest installed the required files. Close Celeste from the app switcher, then open it again to load the mods.",
+                    UIAlertControllerStyle.Alert);
+                alert.AddAction(UIAlertAction.Create("OK", UIAlertActionStyle.Default, null));
+                PresentViewController(alert, true, null);
+                return;
+            }
             SetStatus("Celeste closed. Change mods or press Play to start again.");
         }
 

@@ -8,6 +8,7 @@ using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
 using celestemeow;
+using Mono.Cecil;
 using Mono.Cecil.Cil;
 using MonoMod.Cil;
 
@@ -87,6 +88,7 @@ internal static class Program
         VerifyChroniaExternalLinks(projectDirectory, configuration, fixtureOutput);
         IOSHookRuntime.ConfigureGameAssembly(targetPath);
         Assembly everestRuntime = LoadEverestRuntimeAssembly(projectDirectory, fixtureOutput, gameAssemblyPath);
+        VerifyEverestDependencyDownloaderHookGates(projectDirectory, configuration, gameAssemblyPath);
         VerifyLegacyDetourTrampoline(everestRuntime, targetAssembly);
 
         Type colorImportType = targetAssembly.GetType("ColorNativeImportFixture", true);
@@ -618,6 +620,113 @@ internal static class Program
             return null;
         };
         return AssemblyLoadContext.Default.LoadFromAssemblyPath(runtimePath);
+    }
+
+    private static void VerifyEverestDependencyDownloaderHookGates(string projectDirectory, string configuration, string gameAssemblyPath)
+    {
+        string repoDirectory = Path.GetFullPath(Path.Combine(projectDirectory, "..", ".."));
+        string runtimeDirectory = Path.Combine(repoDirectory, "Everest", "Celeste.Mod.mm", "bin", "Release", "net8.0");
+        string runtimePath = Path.Combine(runtimeDirectory, "Celeste.Mod.mm.dll");
+        if (!File.Exists(runtimePath))
+            throw new FileNotFoundException("The patched Everest runtime was not built for dependency hook verification.", runtimePath);
+
+        string[] resolverDirectories = new[]
+        {
+            runtimeDirectory,
+            Path.Combine(repoDirectory, "Everest", "lib-stripped"),
+            Path.GetDirectoryName(gameAssemblyPath),
+            Path.Combine(repoDirectory, "Everest", "Celeste.Mod.mm", "bin", configuration, "net8.0")
+        }.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+        string assemblyName;
+        int wovenCount;
+        string[] skipped;
+        byte[] woven = IOSHookWeaver.WeaveAssembly(File.ReadAllBytes(runtimePath), out assemblyName, out wovenCount,
+            out skipped, runtimeDirectory, resolverDirectories);
+        if (skipped.Length != 0)
+            throw new InvalidOperationException("The patched Everest runtime had unhookable methods: " + string.Join(" | ", skipped));
+
+        string[] targets =
+        {
+            "Celeste.Mod.UI.OuiModOptions::CreateMenu",
+            "Celeste.Mod.UI.OuiDependencyDownloader::Enter",
+            "Celeste.Mod.UI.OuiDependencyDownloader::downloadAllDependencies",
+            "Celeste.Mod.UI.OuiDependencyDownloader::downloadDependency",
+            "Celeste.Mod.UI.OuiDependencyDownloader::Update",
+            "Celeste.Mod.UI.OuiDependencyDownloader::Exit",
+            "Celeste.Mod.Helpers.ModUpdaterHelper::DownloadModUpdateList",
+            "Celeste.Mod.Helpers.ModUpdaterHelper::DownloadModDependencyGraph",
+            "Celeste.Mod.Helpers.ModUpdaterHelper::GetAllMirrorUrls",
+            "Celeste.Mod.Helpers.ModUpdaterHelper::VerifyChecksum",
+            "Celeste.Mod.Helpers.ModUpdaterHelper::InstallModUpdate",
+            "Celeste.Mod.Everest::SlowFullRestart"
+        };
+
+        using (AssemblyDefinition assembly = AssemblyDefinition.ReadAssembly(new MemoryStream(woven),
+            new ReaderParameters { InMemory = true }))
+        {
+            foreach (string target in targets)
+            {
+                string[] parts = target.Split(new[] { "::" }, StringSplitOptions.None);
+                TypeDefinition type = assembly.MainModule.GetType(parts[0]);
+                MethodDefinition[] methods = type == null
+                    ? Array.Empty<MethodDefinition>()
+                    : type.Methods.Where(method => method.Name == parts[1]).ToArray();
+                if (methods.Length == 0)
+                    throw new MissingMethodException(parts[0], parts[1]);
+
+                foreach (MethodDefinition method in methods)
+                {
+                    string original = IOSHookIdentity.OriginalMethodName(method);
+                    string gate = IOSHookIdentity.GateFieldName(method);
+                    if (!type.Methods.Any(candidate => candidate.Name == original) ||
+                        !type.Fields.Any(candidate => candidate.Name == gate))
+                        throw new InvalidOperationException("Everest dependency path method did not receive an iOS hook gate: " + method.FullName);
+                }
+            }
+
+            List<TypeDefinition> allTypes = new List<TypeDefinition>();
+            Stack<TypeDefinition> pendingTypes = new Stack<TypeDefinition>(assembly.MainModule.Types);
+            while (pendingTypes.Count > 0)
+            {
+                TypeDefinition type = pendingTypes.Pop();
+                allTypes.Add(type);
+                foreach (TypeDefinition nested in type.NestedTypes)
+                    pendingTypes.Push(nested);
+            }
+            MethodDefinition[] allMethods = allTypes.SelectMany(type => type.Methods).ToArray();
+
+            if (!allMethods.Any(method => method.HasBody && method.Body.Instructions.Any(instruction =>
+                string.Equals(instruction.Operand as string, "EVEREST_TMPDIR", StringComparison.Ordinal))))
+                throw new InvalidOperationException("Everest does not honor the app-provided writable iOS temporary directory.");
+
+            TypeDefinition downloader = assembly.MainModule.GetType("Celeste.Mod.UI.OuiDependencyDownloader");
+            MethodDefinition download = downloader?.Methods.FirstOrDefault(method => method.Name == "downloadDependency");
+            MethodDefinition downloadBody = download == null
+                ? null
+                : downloader.Methods.FirstOrDefault(method => method.Name == IOSHookIdentity.OriginalMethodName(download));
+            bool downloadsToEverestTemp = downloadBody?.Body?.Instructions.Any(instruction =>
+                instruction.Operand is string path && path == "dependency-download.zip") == true &&
+                downloadBody.Body.Instructions.Any(instruction => instruction.Operand is MethodReference reference &&
+                    reference.Name == "get_PathTmp" && reference.DeclaringType.FullName == "Celeste.Mod.Everest");
+            if (!downloadsToEverestTemp)
+                throw new InvalidOperationException("Everest's in-game dependency downloader no longer writes through its configured temporary directory.");
+
+            MethodDefinition restartCallbackMethod = allMethods.FirstOrDefault(method => method.HasBody &&
+                method.Body.Instructions.Any(instruction =>
+                    string.Equals(instruction.Operand as string, "Celeste.IOSHookRuntime.RequestCelesteRestart", StringComparison.Ordinal)) &&
+                method.Body.Instructions.Any(instruction => instruction.Operand is MethodReference reference &&
+                    reference.Name == "add_OnShutdown"));
+            bool desktopRestartFallback = allMethods.Any(method => method.Name.StartsWith("__ios_original_", StringComparison.Ordinal) &&
+                method.DeclaringType.FullName.Contains("Celeste.Mod.Everest/<>c", StringComparison.Ordinal) &&
+                method.HasBody && method.Body.Instructions.Any(instruction => instruction.Operand is MethodReference fallback &&
+                    fallback.Name == "StartCelesteProcess" && fallback.DeclaringType.FullName == "Celeste.Mod.BOOT"));
+            bool restartReturnsToIOSLauncher = restartCallbackMethod != null && desktopRestartFallback;
+            if (!restartReturnsToIOSLauncher)
+                throw new InvalidOperationException("Everest's iOS full-restart path must return to the launcher while preserving the desktop restart fallback.");
+        }
+
+        Console.WriteLine("PASS Everest in-game dependency menu, catalog, writable-temp download, checksum/install, and iOS restart path are woven and wired (" + wovenCount + " methods woven).");
     }
 
     private static void CallLegacyHookManager(Assembly everestRuntime, string methodName, MethodBase target, Delegate callback)

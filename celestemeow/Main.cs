@@ -20,6 +20,7 @@ namespace celestemeow
         static ModManagerViewController modManagerController;
         static bool celesteIsRunning;
         static string appBundleDirectory;
+        static bool celesteRestartRequested;
         static readonly object DiagnosticsLock = new object();
         static string startupErrorPath;
 
@@ -264,6 +265,7 @@ namespace celestemeow
                 return;
 
             celesteIsRunning = true;
+            celesteRestartRequested = false;
             Exception launchException = null;
             try
             {
@@ -283,11 +285,19 @@ namespace celestemeow
                 try { SetSdlEventPump(0); } catch { }
                 modManagerWindow.Hidden = false;
                 modManagerWindow.MakeKeyAndVisible();
-                modManagerController?.GameDidReturn();
+                bool restartRequested = celesteRestartRequested;
+                celesteRestartRequested = false;
+                modManagerController?.GameDidReturn(restartRequested);
                 if (launchException != null)
                     modManagerController?.ShowProblem(launchException);
                 celesteIsRunning = false;
             }
+        }
+
+        static void RequestCelesteRestart()
+        {
+            celesteRestartRequested = true;
+            TraceStartup("Everest requested a full restart; returning to the launcher for a clean app relaunch.");
         }
 
         static void ReportStartupException(Exception exception)
@@ -333,6 +343,13 @@ namespace celestemeow
             IOSNativeImports.EnsureRequiredImportsAreLinked();
             RegisterIOSClipboardDelegates();
             IOSHookRuntime.Initialize();
+            string dataDirectory = IOSModLibrary.DataPath;
+            string temporaryDirectory = Path.Combine(dataDirectory, "tmp");
+            Directory.CreateDirectory(temporaryDirectory);
+            Environment.SetEnvironmentVariable("EVEREST_TMPDIR", temporaryDirectory);
+            AppDomain.CurrentDomain.SetData("Celeste.IOSHookRuntime.EverestDataPath", dataDirectory);
+            AppDomain.CurrentDomain.SetData("Celeste.IOSHookRuntime.RequestCelesteRestart", (Action)RequestCelesteRestart);
+
             string bundleDirectory = string.IsNullOrWhiteSpace(appBundleDirectory)
                 ? NSBundle.MainBundle.BundlePath
                 : appBundleDirectory;
@@ -350,7 +367,6 @@ namespace celestemeow
 
             TraceStartup("loading Celeste assembly from " + gameAssemblyPath);
             IOSHookRuntime.ConfigureGameAssembly(gameAssemblyPath);
-            AppDomain.CurrentDomain.SetData("Celeste.IOSHookRuntime.EverestDataPath", IOSModLibrary.DataPath);
 
             Assembly gameAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(gameAssemblyPath);
             Type celesteType = gameAssembly.GetType("Celeste.Celeste", throwOnError: true);
