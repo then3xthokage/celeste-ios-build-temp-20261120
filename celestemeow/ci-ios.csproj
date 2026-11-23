@@ -18,6 +18,7 @@
     <UseMonoRuntime>false</UseMonoRuntime>
     <DynamicCodeSupport>true</DynamicCodeSupport>
     <MtouchLink>None</MtouchLink>
+    <MtouchNoSymbolStrip>true</MtouchNoSymbolStrip>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 
