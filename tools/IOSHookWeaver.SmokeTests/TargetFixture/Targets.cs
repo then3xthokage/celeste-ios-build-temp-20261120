@@ -107,6 +107,25 @@ public static class ColorNativeImportFixture
     public static extern int ColorHLSToRGB(int hue, int luminance, int saturation);
 }
 
+public sealed class LegacyDetourTarget
+{
+    public int Value = 5;
+
+    public int Add(int amount)
+    {
+        Value += amount;
+        return Value;
+    }
+
+    public static int DetourAdd(LegacyDetourTarget target, int amount)
+    {
+        target.Value += amount * 10;
+        return target.Value;
+    }
+}
+
+public delegate int LegacyDetourOriginal(LegacyDetourTarget target, int amount);
+
 public struct TestStructTarget
 {
     private int value;

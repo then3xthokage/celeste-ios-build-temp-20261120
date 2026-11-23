@@ -86,6 +86,7 @@ internal static class Program
         VerifyChroniaExternalLinks(projectDirectory, configuration, fixtureOutput);
         IOSHookRuntime.ConfigureGameAssembly(targetPath);
         Assembly everestRuntime = LoadEverestRuntimeAssembly(projectDirectory, fixtureOutput, gameAssemblyPath);
+        VerifyLegacyDetourTrampoline(everestRuntime, targetAssembly);
 
         Type colorImportType = targetAssembly.GetType("ColorNativeImportFixture", true);
         MethodInfo colorImport = colorImportType.GetMethod("ColorHLSToRGB");
@@ -575,6 +576,44 @@ internal static class Program
         {
             throw new InvalidOperationException("Everest hook-manager invocation failed: " + exception.InnerException, exception.InnerException);
         }
+    }
+
+    private static void VerifyLegacyDetourTrampoline(Assembly everestRuntime, Assembly targetAssembly)
+    {
+        Type legacyDetourType = everestRuntime.GetType("Celeste.Mod.Helpers.LegacyMonoMod.LegacyDetour", true);
+        ConstructorInfo constructor = legacyDetourType.GetConstructor(new[] { typeof(MethodBase), typeof(MethodBase) });
+        if (constructor == null)
+            throw new MissingMethodException(legacyDetourType.FullName, ".ctor(MethodBase, MethodBase)");
+
+        Type targetType = targetAssembly.GetType("LegacyDetourTarget", true);
+        MethodInfo targetMethod = targetType.GetMethod("Add", BindingFlags.Public | BindingFlags.Instance);
+        MethodInfo replacement = targetType.GetMethod("DetourAdd", BindingFlags.Public | BindingFlags.Static);
+        object detour = constructor.Invoke(new object[] { targetMethod, replacement });
+        try
+        {
+            object instance = Activator.CreateInstance(targetType);
+            AssertEqual("Everest public LegacyDetour route", "25",
+                targetMethod.Invoke(instance, new object[] { 2 }).ToString());
+
+            Type originalDelegateType = targetAssembly.GetType("LegacyDetourOriginal", true);
+            MethodInfo generateTrampoline = legacyDetourType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .SingleOrDefault(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition &&
+                    method.GetGenericArguments().Length == 1 && method.GetParameters().Length == 0);
+            if (generateTrampoline == null)
+                throw new MissingMethodException(legacyDetourType.FullName, "GenerateTrampoline<T>()");
+            Delegate trampoline = (Delegate)generateTrampoline.MakeGenericMethod(originalDelegateType).Invoke(detour, null);
+            object originalInstance = Activator.CreateInstance(targetType);
+            AssertEqual("Everest GenerateTrampoline<T> original continuation", "7",
+                trampoline.DynamicInvoke(new[] { originalInstance, (object)2 }).ToString());
+        }
+        finally
+        {
+            legacyDetourType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance).Invoke(detour, null);
+        }
+
+        object afterRemoval = Activator.CreateInstance(targetType);
+        AssertEqual("Everest public LegacyDetour removal", "7",
+            targetMethod.Invoke(afterRemoval, new object[] { 2 }).ToString());
     }
 
     private static object AddReflected(MethodInfo target, MethodInfo hook)
