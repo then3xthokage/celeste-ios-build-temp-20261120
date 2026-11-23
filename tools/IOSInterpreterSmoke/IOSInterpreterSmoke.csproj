@@ -17,6 +17,7 @@
   <ItemGroup>
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
     <ProjectReference Include="../../Everest/external/MonoMod/src/MonoMod.Utils/MonoMod.Utils.csproj" />
+    <ProjectReference Include="../../Everest/Celeste.Mod.mm/Celeste.Mod.mm.csproj" />
     <Reference Include="NLua">
       <HintPath>../../Everest/external/NLua/lib/Release/net8.0/NLua.dll</HintPath>
       <Private>true</Private>

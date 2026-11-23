@@ -121,6 +121,33 @@ public static class RuntimeProbe
         IOSHookRuntime.RemoveDetour(add, detourIdentity);
         AssertEqual("Managed detour removal after trampoline creation", 10, add.Invoke(null, new object[] { 6, 4 }));
 
+        Mark("Everest public detour trampoline on iOS interpreter");
+        Type legacyDetourType = typeof(Celeste.Mod.Helpers.LegacyMonoMod.LegacyDetour);
+        ConstructorInfo legacyConstructor = legacyDetourType.GetConstructor(new[] { typeof(MethodBase), typeof(MethodBase) });
+        if (legacyConstructor == null)
+            throw new MissingMethodException(legacyDetourType.FullName, ".ctor(MethodBase, MethodBase)");
+        object legacyDetour = legacyConstructor.Invoke(new object[] {
+            add, targetType.GetMethod("DetourAdd", BindingFlags.Public | BindingFlags.Static) });
+        try
+        {
+            AssertEqual("Everest LegacyDetour public route", 110, add.Invoke(null, new object[] { 6, 4 }));
+            MethodInfo legacyTrampolineFactory = legacyDetourType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .SingleOrDefault(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition &&
+                    method.GetGenericArguments().Length == 1 && method.GetParameters().Length == 0);
+            if (legacyTrampolineFactory == null)
+                throw new MissingMethodException(legacyDetourType.FullName, "GenerateTrampoline<T>()");
+            Delegate legacyTrampoline = (Delegate)legacyTrampolineFactory.MakeGenericMethod(trampolineType)
+                .Invoke(legacyDetour, null);
+            AssertEqual("Everest GenerateTrampoline<T> continuation", 10,
+                legacyTrampoline.DynamicInvoke(new object[] { 6, 4 }));
+        }
+        finally
+        {
+            legacyDetourType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+                .Invoke(legacyDetour, null);
+        }
+        AssertEqual("Everest LegacyDetour removal", 10, add.Invoke(null, new object[] { 6, 4 }));
+
         Mark("ILContext hook and removal");
         MethodInfo constant = targetType.GetMethod("Constant", BindingFlags.Public | BindingFlags.Static);
         ILContext.Manipulator editConstant = context =>
