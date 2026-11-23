@@ -16,6 +16,7 @@
     <Compile Include="../../celestemeow/IOSHookIdentity.cs" Link="IOSHookIdentity.cs" />
     <Compile Include="../../celestemeow/IOSHookRuntime.cs" Link="IOSHookRuntime.cs" />
     <Compile Include="../../celestemeow/IOSILHookRuntime.cs" Link="IOSILHookRuntime.cs" />
+    <Compile Include="../../celestemeow/IOSRuntimeAssemblyResolver.cs" Link="IOSRuntimeAssemblyResolver.cs" />
     <Compile Include="../../celestemeow/ModDependencyResolver.cs" Link="ModDependencyResolver.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
@@ -26,6 +27,8 @@
     <ProjectReference Include="TextCopyFixture/TextCopyFixture.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="CeilingUltraFixture/CeilingUltraFixture.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="ChroniaHelperFixture/ChroniaHelperFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="BundledResolverFixture/BundledResolverFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="EverestResolverFixture/EverestResolverFixture.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="WovenInfrastructureProbe/WovenInfrastructureProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="../../Everest/Celeste.Mod.mm/Celeste.Mod.mm.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>

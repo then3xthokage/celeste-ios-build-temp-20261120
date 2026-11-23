@@ -15,6 +15,7 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        VerifyBundledRuntimeAssemblyResolver();
         VerifyDependencyResolver();
         string projectDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
         string configuration = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar)).Name;
@@ -344,6 +345,53 @@ internal static class Program
 
         Console.WriteLine("Typed hook smoke passed: woven=" + wovenCount + "; patched Everest On/IL integration and removal; full-body Everest constructor wrappers with branches; open generic IL, reflected On hooks, and detours across generic methods and declaring types; native decoder imports; hookable Windows HLS import shim; app-bundle and in-memory mod dependency resolution; ref-return, exact ref-readonly modifiers, in/ref, Span, pointer and function-pointer signatures; value-type instance detours and constructors; branchy and generic constructor chains; static constructors; generic type/method combinations; reflected callbacks; and cross-load-context dispatch.");
         return 0;
+    }
+
+    private static void VerifyBundledRuntimeAssemblyResolver()
+    {
+        string projectDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
+        string configuration = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar)).Name;
+        string fnaFixturePath = Path.Combine(projectDirectory, "BundledResolverFixture", "bin", configuration,
+            "net8.0", "FNA.dll");
+        string everestFixturePath = Path.Combine(projectDirectory, "EverestResolverFixture", "bin", configuration,
+            "net8.0", "EverestResolverFixture.dll");
+        if (!File.Exists(fnaFixturePath))
+            throw new FileNotFoundException("The bundled FNA resolver fixture was not built.", fnaFixturePath);
+        if (!File.Exists(everestFixturePath))
+            throw new FileNotFoundException("The bundled Everest resolver fixture was not built.", everestFixturePath);
+
+        string appBundle = Path.Combine(Path.GetTempPath(), "CelesteIOSRuntimeResolverSmoke-" + Guid.NewGuid().ToString("N"));
+        string runtimeDirectory = Path.Combine(appBundle, "RuntimeAssemblies");
+        string everestDirectory = Path.Combine(appBundle, "RuntimeAssemblies", "Everest");
+        Directory.CreateDirectory(runtimeDirectory);
+        Directory.CreateDirectory(everestDirectory);
+        File.Copy(fnaFixturePath, Path.Combine(runtimeDirectory, "FNA.dll"));
+        File.Copy(everestFixturePath, Path.Combine(everestDirectory, "EverestResolverFixture.dll"));
+
+        AssemblyLoadContext context = new AssemblyLoadContext("NestedRuntimeResolverSmoke", isCollectible: true);
+        try
+        {
+            IOSRuntimeAssemblyResolver.Attach(context, appBundle, null);
+            Assembly fnaFixture = context.LoadFromAssemblyName(new AssemblyName("FNA, Version=24.1.0.0"));
+            Type fnaProbe = fnaFixture.GetType("BundledResolverFixture.Probe", throwOnError: true);
+            string fnaValue = (string)fnaProbe.GetProperty("Value").GetValue(null);
+            if (fnaValue != "loaded from RuntimeAssemblies/FNA.dll")
+                throw new InvalidOperationException("The bundled FNA resolver loaded the wrong assembly.");
+
+            Assembly everestFixture = context.LoadFromAssemblyName(new AssemblyName("EverestResolverFixture"));
+            Type everestProbe = everestFixture.GetType("EverestResolverFixture.Probe", throwOnError: true);
+            string everestValue = (string)everestProbe.GetProperty("Value").GetValue(null);
+            if (everestValue != "loaded from RuntimeAssemblies/Everest")
+                throw new InvalidOperationException("The nested Everest resolver loaded the wrong assembly.");
+        }
+        finally
+        {
+            context.Unload();
+            try { if (Directory.Exists(appBundle)) Directory.Delete(appBundle, recursive: true); }
+            catch { }
+        }
+
+        Console.WriteLine("PASS iOS runtime resolver loads FNA and Everest assemblies from their bundled folders.");
     }
 
     private static byte[] ApplyEverestStyleConstructorShape(byte[] source)

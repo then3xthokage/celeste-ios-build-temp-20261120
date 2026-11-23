@@ -3,6 +3,7 @@ using System.Reflection;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -124,6 +125,12 @@ namespace celestemeow
                 };
                 Console.SetOut(startupWriter);
                 Console.SetError(startupWriter);
+
+                IOSRuntimeAssemblyResolver.Attach(
+                    AssemblyLoadContext.Default,
+                    AppContext.BaseDirectory,
+                    TraceStartup);
+                TraceStartup("managed runtime assembly resolver registered; base=" + AppContext.BaseDirectory);
 
                 AppDomain.CurrentDomain.UnhandledException += HandleUnhandledException;
                 TaskScheduler.UnobservedTaskException += HandleUnobservedTaskException;

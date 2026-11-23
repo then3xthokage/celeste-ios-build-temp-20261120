@@ -40,6 +40,31 @@ def read_macho(path):
         return stream.read()
 
 
+def verify_managed_bundle(path):
+    if not zipfile.is_zipfile(path):
+        return
+
+    with zipfile.ZipFile(path) as archive:
+        names = set(archive.namelist())
+        plist_name = next(
+            name for name in names
+            if name.startswith("Payload/") and name.endswith(".app/Info.plist")
+        )
+        bundle_root = plist_name[:-len("Info.plist")]
+        required = (
+            "Celeste.dll",
+            "RuntimeAssemblies/FNA.dll",
+            "RuntimeAssemblies/Everest/Celeste.Mod.mm.dll",
+            "RuntimeAssemblies/Everest/MonoMod.RuntimeDetour.dll",
+        )
+        missing = [bundle_root + name for name in required if bundle_root + name not in names]
+        if missing:
+            raise ValueError("iOS app bundle is missing managed runtime assemblies: " + ", ".join(missing))
+        for name in required:
+            if archive.getinfo(bundle_root + name).file_size == 0:
+                raise ValueError("iOS app bundle contains an empty managed assembly: " + bundle_root + name)
+
+
 def read_uleb(data, offset):
     value = 0
     shift = 0
@@ -129,6 +154,7 @@ def main():
     parser.add_argument("binary_or_ipa", help="arm64 app executable or IPA archive")
     arguments = parser.parse_args()
     try:
+        verify_managed_bundle(arguments.binary_or_ipa)
         symbols = exported_symbols(read_macho(arguments.binary_or_ipa))
     except Exception as error:
         print("iOS native export verification failed: " + str(error), file=sys.stderr)
