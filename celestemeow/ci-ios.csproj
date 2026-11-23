@@ -93,29 +93,17 @@
 
   <ItemGroup>
     <LinkerArgument Include="-lc++" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_tf_gettheorasize" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_tf_granpos_dec" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_tf_readaudio2" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_tf_readvideo2" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_FNA3D_GenVertexBuffer" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_FNA3D_SetVertexBufferData" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_FNA3D_AddDisposeVertexBuffer" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_FNA3D_GenIndexBuffer" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_FNA3D_SetIndexBufferData" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_FNA3D_AddDisposeIndexBuffer" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_FNA3D_ApplyVertexBufferBindings" />
-    <LinkerArgument Include="-exported_symbol" />
-    <LinkerArgument Include="_FNA3D_DrawIndexedPrimitives" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_tf_gettheorasize" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_tf_granpos_dec" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_tf_readaudio2" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_tf_readvideo2" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_FNA3D_GenVertexBuffer" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_FNA3D_SetVertexBufferData" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_FNA3D_AddDisposeVertexBuffer" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_FNA3D_GenIndexBuffer" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_FNA3D_SetIndexBufferData" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_FNA3D_AddDisposeIndexBuffer" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_FNA3D_ApplyVertexBufferBindings" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_FNA3D_DrawIndexedPrimitives" />
   </ItemGroup>
 </Project>
