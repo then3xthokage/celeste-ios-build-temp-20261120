@@ -338,20 +338,28 @@ public static class RuntimeProbe
         AssertEqual("Everest LegacyHook removal", 10, add.Invoke(null, new object[] { 6, 4 }));
 
         Mark("Everest LegacyHook trampolines follow downstream changes on iOS interpreter");
+        MethodInfo liveHookGenericTrampolineFactory = legacyHookType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .SingleOrDefault(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition &&
+                method.GetGenericArguments().Length == 1 && method.GetParameters().Length == 0)
+            ?? throw new MissingMethodException(legacyHookType.FullName, "GenerateTrampoline<T>()");
         object firstLegacyHook = legacyHookConstructor.Invoke(new object[] {
             add, hooksType.GetMethod("AddTwenty", BindingFlags.Public | BindingFlags.Static) });
         object secondLegacyHook = null;
         try
         {
-            Delegate liveHookTrampoline = (Delegate)legacyTrampolineFactory.MakeGenericMethod(trampolineType)
+            Mark("LegacyHook live-chain probe: create first Hook trampoline");
+            Delegate liveHookTrampoline = (Delegate)liveHookGenericTrampolineFactory.MakeGenericMethod(trampolineType)
                 .Invoke(firstLegacyHook, null);
+            Mark("LegacyHook live-chain probe: create first MethodBase trampoline");
             MethodInfo liveHookMethodTrampoline = (MethodInfo)legacyHookMethodTrampolineFactory.Invoke(
                 firstLegacyHook, new object[] { trampolineSignature });
+            Mark("LegacyHook live-chain probe: invoke trampolines before downstream hook");
             AssertEqual("LegacyHook trampoline before downstream hook", 10,
                 liveHookTrampoline.DynamicInvoke(new object[] { 6, 4 }));
             AssertEqual("LegacyHook MethodBase trampoline before downstream hook", 10,
                 liveHookMethodTrampoline.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
 
+            Mark("LegacyHook live-chain probe: construct downstream Hook");
             secondLegacyHook = legacyHookConstructor.Invoke(new object[] {
                 add, hooksType.GetMethod("AddHundred", BindingFlags.Public | BindingFlags.Static) });
             AssertEqual("LegacyHook live route with downstream hook", 130,
