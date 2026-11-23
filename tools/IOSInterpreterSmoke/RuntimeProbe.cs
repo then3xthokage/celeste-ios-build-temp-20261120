@@ -184,6 +184,47 @@ public static class RuntimeProbe
         }
         AssertEqual("Everest LegacyDetour removal", 10, add.Invoke(null, new object[] { 6, 4 }));
 
+        Mark("Everest public LegacyHook orig trampoline and Detour facade on iOS interpreter");
+        MethodInfo legacyOnMethod = hooksType.GetMethod("Add", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new MissingMethodException(hooksType.FullName, "Add");
+        object legacyHook = legacyHookConstructor.Invoke(new object[] { add, legacyOnMethod });
+        try
+        {
+            PropertyInfo legacyDetourProperty = legacyHookType.GetProperty("Detour", BindingFlags.Public | BindingFlags.Instance)
+                ?? throw new MissingMemberException(legacyHookType.FullName, "Detour");
+            object hookDetour = legacyDetourProperty.GetValue(legacyHook)
+                ?? throw new InvalidOperationException("The iOS LegacyHook did not expose its public Detour facade.");
+            if (legacyHookType.GetField("TargetReal", BindingFlags.Public | BindingFlags.Instance).GetValue(legacyHook) == null)
+                throw new InvalidOperationException("The iOS LegacyHook left TargetReal unset.");
+            if (!(bool)hookDetour.GetType().GetProperty("IsApplied").GetValue(hookDetour))
+                throw new InvalidOperationException("The iOS LegacyHook Detour facade did not report that it was applied.");
+            AssertEqual("Everest LegacyHook orig delegate call", 15,
+                add.Invoke(null, new object[] { 6, 4 }));
+
+            Delegate hookTrampoline = (Delegate)legacyTrampolineFactory.MakeGenericMethod(trampolineType)
+                .Invoke(hookDetour, null);
+            AssertEqual("Everest LegacyHook Detour trampoline", 10,
+                hookTrampoline.DynamicInvoke(new object[] { 6, 4 }));
+
+            hookDetour.GetType().GetMethod("Undo", BindingFlags.Public | BindingFlags.Instance)
+                .Invoke(hookDetour, null);
+            if ((bool)legacyHookType.GetProperty("IsApplied").GetValue(legacyHook))
+                throw new InvalidOperationException("Undo through the iOS LegacyHook Detour facade left the hook applied.");
+            AssertEqual("Everest LegacyHook call after Detour undo", 10,
+                add.Invoke(null, new object[] { 6, 4 }));
+
+            hookDetour.GetType().GetMethod("Apply", BindingFlags.Public | BindingFlags.Instance)
+                .Invoke(hookDetour, null);
+            AssertEqual("Everest LegacyHook call after Detour reapply", 15,
+                add.Invoke(null, new object[] { 6, 4 }));
+        }
+        finally
+        {
+            legacyHookType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+                .Invoke(legacyHook, null);
+        }
+        AssertEqual("Everest LegacyHook removal", 10, add.Invoke(null, new object[] { 6, 4 }));
+
         Mark("QuickieMountain2 instance detour trampoline signature on iOS interpreter");
         Type updateStatsTargetType = fixture.GetType("ProbeOuiUpdateStatsTarget", throwOnError: true);
         MethodInfo updateStats = updateStatsTargetType.GetMethod("UpdateStats", BindingFlags.Public | BindingFlags.Instance)
