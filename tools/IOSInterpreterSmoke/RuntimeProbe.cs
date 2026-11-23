@@ -302,8 +302,10 @@ public static class RuntimeProbe
                 .SingleOrDefault(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition &&
                     method.GetGenericArguments().Length == 1 && method.GetParameters().Length == 0)
                 ?? throw new MissingMethodException(legacyHookType.FullName, "GenerateTrampoline<T>()");
+            MethodInfo hookTrampolineOverride = targetType.GetMethod("TrampolineOverride", BindingFlags.Public | BindingFlags.Static)
+                ?? throw new MissingMethodException(targetType.FullName, "TrampolineOverride");
             Celeste.Mod.Helpers.LegacyMonoMod.LegacyHook.OnGenerateTrampoline =
-                (owner, signature) => trampolineOverride;
+                (owner, signature) => hookTrampolineOverride;
             try
             {
                 Delegate callbackHookTrampoline = (Delegate)legacyHookTrampolineFactory.MakeGenericMethod(trampolineType)
