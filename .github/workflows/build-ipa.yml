@@ -7,7 +7,7 @@ on:
         description: Upload a non-certified IPA to the private device-test release for on-device testing
         required: false
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
