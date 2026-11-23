@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -35,6 +36,7 @@ namespace celestemeow
         public string MirrorName { get; set; }
         public string DownloadName { get; set; }
         public long Size { get; set; }
+        public long GameBananaId { get; set; }
 
         public string DisplayName
         {
@@ -94,9 +96,22 @@ namespace celestemeow
             public PackageInfo Package;
         }
 
+        private sealed class GameBananaFile
+        {
+            public string Name;
+            public string Description;
+            public string Url;
+            public string Md5;
+            public string MirrorName;
+            public long Size;
+            public long Added;
+        }
+
         private static readonly IDeserializer MetadataDeserializer = new DeserializerBuilder().IgnoreUnmatchedProperties().Build();
         private static readonly HttpClient Http = CreateHttpClient();
         private const int MaxDependencySearchCandidates = 12;
+        private const int MaxGameBananaFilesPerMod = 8;
+        private const int CelesteGameBananaId = 6460;
         private static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "CelesteMods");
         private static readonly string ModsDirectory = Path.Combine(Root, "Mods");
         private static readonly string AutoUpdateSettingPath = Path.Combine(Root, "auto-update.txt");
@@ -663,6 +678,15 @@ namespace celestemeow
                 {
                     lastSearchError = exception;
                 }
+
+                try
+                {
+                    searchResults.AddRange(await SearchGameBananaCatalogAsync(query));
+                }
+                catch (Exception exception)
+                {
+                    lastSearchError = exception;
+                }
             }
 
             if (searchResults.Count == 0 && lastSearchError != null)
@@ -673,7 +697,9 @@ namespace celestemeow
             string normalizedName = ModDependencyResolver.NormalizeName(dependency.Name);
             List<CatalogMod> candidates = searchResults
                 .Where(candidate => candidate != null && !string.IsNullOrWhiteSpace(candidate.Url))
-                .GroupBy(candidate => string.IsNullOrWhiteSpace(candidate.MirrorName) ? candidate.Url : candidate.MirrorName,
+                .GroupBy(candidate => candidate.GameBananaId > 0
+                        ? "gamebanana:" + candidate.GameBananaId.ToString(CultureInfo.InvariantCulture)
+                        : string.IsNullOrWhiteSpace(candidate.MirrorName) ? candidate.Url : candidate.MirrorName,
                     StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.First())
                 .Select((candidate, index) => new
@@ -698,6 +724,14 @@ namespace celestemeow
                 try
                 {
                     progress?.Report("Checking " + candidate.DisplayName + " for required module " + dependency.Name + "...");
+                    if (candidate.GameBananaId > 0)
+                    {
+                        PackageInfo directPackage = await DownloadDependencyFromGameBananaItemAsync(
+                            candidate, dependency, tempPath, progress);
+                        if (directPackage != null) return directPackage;
+                        continue;
+                    }
+
                     await DownloadWithMirrorsAsync(candidate.Url, candidate.MirrorName, tempPath, progress);
                     PackageInfo package = InspectArchive(tempPath, candidate.Name);
                     ModMetadata module = FindModule(package, dependency.Name);
@@ -729,6 +763,155 @@ namespace celestemeow
             throw new FileNotFoundException(
                 "No GameBanana package found a compatible " + dependency.Name + " module after checking " + candidates.Count + " candidate(s).",
                 lastError);
+        }
+
+        private static async Task<List<CatalogMod>> SearchGameBananaCatalogAsync(string query)
+        {
+            if (string.IsNullOrWhiteSpace(query)) return new List<CatalogMod>();
+            string url = "https://gamebanana.com/apiv11/Util/Search/Results?_sSearchString=" +
+                Uri.EscapeDataString(query.Trim()) + "&_idGameRow=" + CelesteGameBananaId.ToString(CultureInfo.InvariantCulture) +
+                "&_sModelName=Mod&_nPage=1&_nPerpage=30";
+            using (HttpResponseMessage response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
+            {
+                response.EnsureSuccessStatusCode();
+                using (Stream stream = await response.Content.ReadAsStreamAsync())
+                using (MemoryStream buffer = new MemoryStream())
+                {
+                    await stream.CopyToAsync(buffer);
+                    return ParseGameBananaSearchResults(Encoding.UTF8.GetString(buffer.ToArray()));
+                }
+            }
+        }
+
+        private static List<CatalogMod> ParseGameBananaSearchResults(string json)
+        {
+            using (JsonDocument document = JsonDocument.Parse(json))
+            {
+                JsonElement records;
+                if (!document.RootElement.TryGetProperty("_aRecords", out records) || records.ValueKind != JsonValueKind.Array)
+                    return new List<CatalogMod>();
+                List<CatalogMod> result = new List<CatalogMod>();
+                foreach (JsonElement item in records.EnumerateArray())
+                {
+                    long id = GetLong(item, "_idRow");
+                    string name = GetString(item, "_sName");
+                    if (id <= 0 || string.IsNullOrWhiteSpace(name)) continue;
+                    result.Add(new CatalogMod
+                    {
+                        Name = name,
+                        Url = "https://gamebanana.com/mods/" + id.ToString(CultureInfo.InvariantCulture),
+                        GameBananaId = id
+                    });
+                }
+                return result;
+            }
+        }
+
+        private static async Task<List<GameBananaFile>> GetGameBananaFilesAsync(long gameBananaId)
+        {
+            string url = "https://api.gamebanana.com/Core/Item/Data?itemtype=Mod&itemid=" +
+                gameBananaId.ToString(CultureInfo.InvariantCulture) + "&fields=Files().aFiles()&return_keys=1&format=json";
+            using (HttpResponseMessage response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
+            {
+                response.EnsureSuccessStatusCode();
+                using (Stream stream = await response.Content.ReadAsStreamAsync())
+                using (MemoryStream buffer = new MemoryStream())
+                {
+                    await stream.CopyToAsync(buffer);
+                    return ParseGameBananaFiles(Encoding.UTF8.GetString(buffer.ToArray()));
+                }
+            }
+        }
+
+        private static List<GameBananaFile> ParseGameBananaFiles(string json)
+        {
+            using (JsonDocument document = JsonDocument.Parse(json))
+            {
+                JsonElement files;
+                if (!document.RootElement.TryGetProperty("Files().aFiles()", out files) || files.ValueKind != JsonValueKind.Object)
+                    return new List<GameBananaFile>();
+                List<GameBananaFile> result = new List<GameBananaFile>();
+                foreach (JsonProperty property in files.EnumerateObject())
+                {
+                    JsonElement file = property.Value;
+                    string fileUrl = GetString(file, "_sDownloadUrl");
+                    Uri parsedUrl;
+                    if (!Uri.TryCreate(fileUrl, UriKind.Absolute, out parsedUrl) || parsedUrl.Scheme != Uri.UriSchemeHttps ||
+                        (!string.Equals(parsedUrl.Host, "gamebanana.com", StringComparison.OrdinalIgnoreCase) &&
+                         !parsedUrl.Host.EndsWith(".gamebanana.com", StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    result.Add(new GameBananaFile
+                    {
+                        Name = GetString(file, "_sFile"),
+                        Description = GetString(file, "_sDescription"),
+                        Url = fileUrl,
+                        Md5 = GetString(file, "_sMd5Checksum"),
+                        MirrorName = property.Name,
+                        Size = GetLong(file, "_nFilesize"),
+                        Added = GetLong(file, "_tsDateAdded")
+                    });
+                }
+                return result.OrderByDescending(file => file.Added).ToList();
+            }
+        }
+
+        private static async Task<PackageInfo> DownloadDependencyFromGameBananaItemAsync(
+            CatalogMod candidate,
+            ModDependency dependency,
+            string tempPath,
+            IProgress<string> progress)
+        {
+            List<GameBananaFile> files = await GetGameBananaFilesAsync(candidate.GameBananaId);
+            if (files.Count == 0)
+                throw new FileNotFoundException("GameBanana has no public download files for " + candidate.Name + ".");
+
+            Exception lastError = null;
+            foreach (GameBananaFile file in files.Take(MaxGameBananaFilesPerMod))
+            {
+                try
+                {
+                    progress?.Report("Checking " + file.Name + " from " + candidate.Name + "...");
+                    await DownloadWithMirrorsAsync(file.Url, file.MirrorName, tempPath, progress);
+                    VerifyGameBananaFileHash(tempPath, file.Md5);
+                    PackageInfo package = InspectArchive(tempPath, candidate.Name);
+                    ModMetadata module = FindModule(package, dependency.Name);
+                    if (module == null)
+                        throw new InvalidDataException("The GameBanana file does not contain module " + dependency.Name + ".");
+                    if (!VersionSatisfies(dependency.Version, module.Version))
+                        throw new InvalidDataException("The GameBanana file provides " + dependency.Name + " " + module.Version +
+                            ", which does not satisfy version " + dependency.Version + ".");
+                    progress?.Report("Found compatible " + dependency.Name + " " + module.Version + " on GameBanana.");
+                    return package;
+                }
+                catch (Exception exception)
+                {
+                    lastError = exception;
+                }
+
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            }
+
+            throw new InvalidDataException(
+                "No public file on the GameBanana page " + candidate.Name + " contains a compatible " + dependency.Name + " module.",
+                lastError);
+        }
+
+        private static void VerifyGameBananaFileHash(string path, string expectedMd5)
+        {
+            if (string.IsNullOrWhiteSpace(expectedMd5)) return;
+            if (!Regex.IsMatch(expectedMd5, "^[0-9a-fA-F]{32}$"))
+                throw new InvalidDataException("GameBanana returned an invalid file checksum.");
+            string actualMd5;
+            using (MD5 md5 = MD5.Create())
+            using (FileStream stream = File.OpenRead(path))
+            {
+                StringBuilder value = new StringBuilder(32);
+                foreach (byte part in md5.ComputeHash(stream))
+                    value.Append(part.ToString("x2", CultureInfo.InvariantCulture));
+                actualMd5 = value.ToString();
+            }
+            if (!string.Equals(actualMd5, expectedMd5, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The GameBanana download checksum did not match for " + Path.GetFileName(path) + ".");
         }
 
         private static List<string> GetDependencySearchQueries(string dependencyName)

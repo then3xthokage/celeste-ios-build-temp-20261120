@@ -11,6 +11,8 @@ internal static class Program
         VerifyNormalizedNames();
         VerifyGameBananaCandidateRanking();
         VerifyDependencySearchQueryVariants();
+        VerifyOfficialGameBananaApiParsing();
+        VerifyOfficialGameBananaChecksum();
         VerifyEverestVersionCompatibility();
         VerifyUniqueModuleAlias();
         VerifyAmbiguousModuleAliasIsRejected();
@@ -53,6 +55,44 @@ internal static class Program
         List<string> punctuatedQueries = (List<string>)InvokePrivate("GetDependencySearchQueries", "Needle-Helper");
         Require(punctuatedQueries.Contains("Needle Helper"),
             "Punctuation-separated dependency names should search their readable title.");
+    }
+
+    private static void VerifyOfficialGameBananaApiParsing()
+    {
+        const string searchJson = "{\"_aRecords\":[{\"_idRow\":377422,\"_sName\":\"Velvet CC-Side\"}]}";
+        var results = (System.Collections.IList)InvokePrivate("ParseGameBananaSearchResults", searchJson);
+        Require(results.Count == 1, "The official GameBanana search response should yield its mod record.");
+        Require(GetProperty<long>(results[0], "GameBananaId") == 377422,
+            "The official GameBanana mod ID should be retained for direct file lookup.");
+
+        const string filesJson = "{\"Files().aFiles()\":{" +
+            "\"100\":{\"_sFile\":\"old.zip\",\"_sDownloadUrl\":\"https://gamebanana.com/dl/100\",\"_tsDateAdded\":10,\"_nFilesize\":20}," +
+            "\"101\":{\"_sFile\":\"new.zip\",\"_sDownloadUrl\":\"https://gamebanana.com/dl/101\",\"_tsDateAdded\":20,\"_nFilesize\":30}," +
+            "\"102\":{\"_sFile\":\"untrusted.zip\",\"_sDownloadUrl\":\"https://example.org/mod.zip\",\"_tsDateAdded\":30,\"_nFilesize\":40}}}";
+        var files = (System.Collections.IList)InvokePrivate("ParseGameBananaFiles", filesJson);
+        Require(files.Count == 2, "The official GameBanana file list should be parsed and non-GameBanana hosts rejected.");
+        Require(GetField<string>(files[0], "Name") == "new.zip",
+            "Official file candidates should be checked newest first.");
+        Require(GetField<string>(files[0], "MirrorName") == "101",
+            "Official file IDs should be preserved for the Celeste community's mirror fallbacks.");
+    }
+
+    private static void VerifyOfficialGameBananaChecksum()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "celeste-ios-gamebanana-hash-" + Guid.NewGuid().ToString("N") + ".zip");
+        try
+        {
+            File.WriteAllText(path, "abc");
+            InvokePrivate("VerifyGameBananaFileHash", path, "900150983cd24fb0d6963f7d28e17f72");
+            bool rejected = false;
+            try { InvokePrivate("VerifyGameBananaFileHash", path, "00000000000000000000000000000000"); }
+            catch (TargetInvocationException exception) when (exception.InnerException is InvalidDataException) { rejected = true; }
+            Require(rejected, "A GameBanana file with a mismatched checksum must be rejected.");
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 
     private static void VerifyEverestVersionCompatibility()
