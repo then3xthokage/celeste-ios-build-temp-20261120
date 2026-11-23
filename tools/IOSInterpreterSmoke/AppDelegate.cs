@@ -31,7 +31,7 @@ internal sealed class AppDelegate : UIApplicationDelegate
             }
             catch (Exception exception)
             {
-                Program.WriteProgress("FAIL\n" + exception);
+                Program.WriteProgress("FAIL at " + RuntimeProbe.CurrentStage + "\n" + exception);
             }
         });
         return true;
