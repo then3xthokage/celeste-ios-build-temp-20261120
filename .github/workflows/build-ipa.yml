@@ -19,7 +19,7 @@ concurrency:
 jobs:
   verify:
     if: github.ref == 'refs/heads/celeste-ios-build'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -42,15 +42,9 @@ jobs:
             9.0.x
             11.0.100
 
-      - name: Install Mono strong-name utility for Linux smoke tests
+      - name: Check Mono strong-name utility on the pinned runner
         shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v sn >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y mono-devel
-          fi
-          command -v sn
+        run: command -v sn
 
       - name: Run typed hook compatibility smoke tests
         working-directory: ${{ runner.temp }}
@@ -321,7 +315,8 @@ jobs:
             echo 'The iOS interpreter smoke app bundle was not produced.' >&2
             exit 1
           fi
-          device_id="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((x["udid"] for xs in d["devices"].values() for x in xs if x.get("isAvailable") and x["name"].startswith("iPhone")), ""))')"
+          device_list="$(run_with_timeout 60 xcrun simctl list devices available -j)"
+          device_id="$(printf '%s' "$device_list" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((x["udid"] for xs in d["devices"].values() for x in xs if x.get("isAvailable") and x["name"].startswith("iPhone")), ""))')"
           if [ -z "$device_id" ]; then
             echo 'No available iPhone simulator was found on the runner.' >&2
             exit 1
