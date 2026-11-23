@@ -381,8 +381,6 @@ jobs:
             --clobber
 
       - name: Preserve matching iOS crash symbols
-        if: vars.CELESTE_MOD_COMPATIBILITY_VERIFIED == 'true'
-        continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
@@ -390,6 +388,13 @@ jobs:
           set -euo pipefail
           storage_repo="hbashton/celeste-ios-ci-temp-20261120"
           output_tag="celeste-ios-build-output"
+          if ! gh release view "$output_tag" --repo "$storage_repo" >/dev/null 2>&1; then
+            gh release create "$output_tag" \
+              --repo "$storage_repo" \
+              --title "Latest Celeste iOS IPA and crash symbols" \
+              --notes "Private build output. The IPA remains gated on completed compatibility verification; matching dSYM archives are retained for device crash reports." \
+              --target celeste-ios-build
+          fi
           symbol_dir="$(find "$GITHUB_WORKSPACE/celestemeow/bin" -type d -name 'ci-ios.app.dSYM' -print -quit)"
           if [ -z "$symbol_dir" ]; then
             echo "No ci-ios.app.dSYM directory was generated."

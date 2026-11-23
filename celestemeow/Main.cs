@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Reflection;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,6 +17,8 @@ namespace celestemeow
         static UIWindow modManagerWindow;
         static ModManagerViewController modManagerController;
         static bool celesteIsRunning;
+        static readonly object DiagnosticsLock = new object();
+        static string startupErrorPath;
 
         static void RegisterIOSClipboardDelegates()
         {
@@ -108,14 +111,19 @@ namespace celestemeow
             try
             {
                 string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                Directory.CreateDirectory(documents);
                 string path = Path.Combine(documents, "celeste-startup-trace.txt");
+                startupErrorPath = Path.Combine(documents, "celeste-startup-error.txt");
                 startupWriter = new StreamWriter(
-                    new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
+                    new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
                 {
                     AutoFlush = true
                 };
                 Console.SetOut(startupWriter);
                 Console.SetError(startupWriter);
+
+                AppDomain.CurrentDomain.UnhandledException += HandleUnhandledException;
+                TaskScheduler.UnobservedTaskException += HandleUnobservedTaskException;
             }
             catch (Exception exception)
             {
@@ -123,6 +131,41 @@ namespace celestemeow
             }
 
             TraceStartup("managed Main entered");
+        }
+
+        static void HandleUnhandledException(object sender, UnhandledExceptionEventArgs eventArgs)
+        {
+            Exception exception = eventArgs.ExceptionObject as Exception;
+            string details = exception == null ? Convert.ToString(eventArgs.ExceptionObject) : exception.ToString();
+            WriteExceptionReport("Unhandled managed exception; terminating=" + eventArgs.IsTerminating, details);
+        }
+
+        static void HandleUnobservedTaskException(object sender, UnobservedTaskExceptionEventArgs eventArgs)
+        {
+            WriteExceptionReport("Unobserved task exception", eventArgs.Exception == null ? "Unknown task exception." : eventArgs.Exception.ToString());
+            eventArgs.SetObserved();
+        }
+
+        static void WriteExceptionReport(string source, string details)
+        {
+            string report = "[" + DateTime.UtcNow.ToString("O") + "] " + source + Environment.NewLine +
+                (details ?? "No exception details were available.") + Environment.NewLine;
+            lock (DiagnosticsLock)
+            {
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(startupErrorPath))
+                        File.AppendAllText(startupErrorPath, report + Environment.NewLine);
+                }
+                catch { }
+
+                try
+                {
+                    startupWriter?.WriteLine(report);
+                    startupWriter?.Flush();
+                }
+                catch { }
+            }
         }
 
         static void TraceStartup(string message)
@@ -234,20 +277,18 @@ namespace celestemeow
 
         static void ReportStartupException(Exception exception)
         {
-            string report = "Celeste iOS startup failed at " + DateTime.UtcNow.ToString("O") + Environment.NewLine + exception;
             TraceStartup("startup exception captured: " + exception.GetType().FullName);
-            Console.Error.WriteLine(report);
+            WriteExceptionReport("Celeste iOS startup or launch failure", exception == null ? "Unknown exception." : exception.ToString());
+        }
 
-            try
-            {
-                string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                string logPath = Path.Combine(documents, "celeste-startup-error.txt");
-                File.WriteAllText(logPath, report);
-            }
-            catch (Exception logException)
-            {
-                Console.Error.WriteLine("Could not save startup details: " + logException);
-            }
+        internal static string[] GetDiagnosticFilePaths()
+        {
+            string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            string[] names = { "celeste-startup-trace.txt", "celeste-startup-error.txt", "log.txt", "errorLog.txt" };
+            return names.Select(name => Path.Combine(documents, name))
+                .Where(File.Exists)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
         }
 
         static void ShowStartupException(Exception exception)

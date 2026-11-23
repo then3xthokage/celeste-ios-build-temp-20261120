@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using CoreGraphics;
@@ -18,6 +19,7 @@ namespace celestemeow
         private UILabel statusLabel;
         private UIView searchContainer;
         private UIButton playButton;
+        private UIButton shareLogsButton;
         private string currentPage = "installed";
         private bool startingGame;
         private bool modActionInProgress;
@@ -82,6 +84,10 @@ namespace celestemeow
             navigation.AddArrangedSubview(playButton);
             page.AddArrangedSubview(navigation);
             navigation.HeightAnchor.ConstraintEqualTo(46).Active = true;
+
+            shareLogsButton = CreateButton("Share logs", ShareDiagnostics);
+            page.AddArrangedSubview(shareLogsButton);
+            shareLogsButton.HeightAnchor.ConstraintEqualTo(40).Active = true;
 
             UIStackView updatePreference = new UIStackView
             {
@@ -467,6 +473,42 @@ namespace celestemeow
             UIAlertController alert = UIAlertController.Create("Celeste could not start", message, UIAlertControllerStyle.Alert);
             alert.AddAction(UIAlertAction.Create("OK", UIAlertActionStyle.Default, null));
             PresentViewController(alert, true, null);
+        }
+
+        private void ShareDiagnostics()
+        {
+            string[] paths = Application.GetDiagnosticFilePaths();
+            if (paths.Length == 0)
+            {
+                SetStatus("No diagnostic logs are available yet. Restart Celeste and try again.", true);
+                return;
+            }
+
+            string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            string readmePath = Path.Combine(documents, "celeste-diagnostics-readme.txt");
+            string readme = "Celeste iOS diagnostics" + Environment.NewLine +
+                "The attached text files contain the startup trace and any managed exception stacks." + Environment.NewLine +
+                "If Celeste closed without a stack in these files, also attach the matching iOS .ips report from " +
+                "Settings > Privacy & Security > Analytics & Improvements > Analytics Data." + Environment.NewLine +
+                "The iOS system report is outside the app's private storage, so the app cannot attach it automatically." +
+                Environment.NewLine;
+            try { File.WriteAllText(readmePath, readme); }
+            catch (Exception exception)
+            {
+                SetStatus("Could not prepare diagnostics: " + exception.Message, true);
+                return;
+            }
+
+            NSUrl[] items = paths.Concat(new[] { readmePath })
+                .Select(NSUrl.FromFilename)
+                .ToArray();
+            UIActivityViewController share = new UIActivityViewController(items, null);
+            if (share.PopoverPresentationController != null)
+            {
+                share.PopoverPresentationController.SourceView = shareLogsButton;
+                share.PopoverPresentationController.SourceRect = shareLogsButton.Bounds;
+            }
+            PresentViewController(share, true, null);
         }
 
         private void AddMessage(string message)
