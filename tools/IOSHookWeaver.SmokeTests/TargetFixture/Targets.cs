@@ -135,6 +135,23 @@ public sealed class LegacyDetourTarget
 
 public delegate int LegacyDetourOriginal(LegacyDetourTarget target, int amount);
 
+public sealed class LegacyConstructorDetourTarget
+{
+    public int Value;
+
+    public LegacyConstructorDetourTarget(int value)
+    {
+        Value = value;
+    }
+
+    public static void DetourConstructor(LegacyConstructorDetourTarget target, int value)
+    {
+        target.Value = value * 10;
+    }
+}
+
+public delegate void LegacyConstructorOriginal(LegacyConstructorDetourTarget target, int value);
+
 public delegate int LegacyHookOriginal(LegacyDetourTarget target, int amount);
 
 public static class LegacyHookTargetHooks

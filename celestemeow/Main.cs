@@ -8,7 +8,6 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Foundation;
-using SDL2;
 using UIKit;
 
 namespace celestemeow
@@ -214,16 +213,16 @@ namespace celestemeow
 
                 // Keep mouse and touch input separate.
                 TraceStartup("setting SDL mouse/touch hints");
-                SDL2.SDL.SDL_SetHint(SDL.SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
-                SDL2.SDL.SDL_SetHint(SDL.SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+                IOSSDLInterop.SetHint("SDL_MOUSE_TOUCH_EVENTS", "0");
+                IOSSDLInterop.SetHint("SDL_TOUCH_MOUSE_EVENTS", "0");
 
                 Console.WriteLine("setting SDL hint FNA3D_FORCE_DRIVER to Vulkan");
-                SDL2.SDL.SDL_SetHint("FNA3D_FORCE_DRIVER", "Vulkan");
+                IOSSDLInterop.SetHint("FNA3D_FORCE_DRIVER", "Vulkan");
                 TraceStartup("SDL hints set");
 
                 realArgs = args;
                 TraceStartup("calling SDL_UIKitRunApp");
-                SDL2.SDL.SDL_UIKitRunApp(0, IntPtr.Zero, FakeMain);
+                IOSSDLInterop.UIKitRunApp(0, IntPtr.Zero, FakeMain);
                 TraceStartup("SDL_UIKitRunApp returned");
             }
             catch (Exception exception)
@@ -235,7 +234,7 @@ namespace celestemeow
 
         static string[] realArgs;
 
-        [ObjCRuntime.MonoPInvokeCallback(typeof(SDL2.SDL.SDL_main_func))]
+        [ObjCRuntime.MonoPInvokeCallback(typeof(IOSSDLInterop.SDLMainFunction))]
         static int FakeMain(int argc, IntPtr argv)
         {
             TraceStartup("SDL main callback entered; argc=" + argc);
@@ -324,8 +323,8 @@ namespace celestemeow
                 if (message.Length > 2500)
                     message = message.Substring(0, 2500) + "\n\nFull details were saved as celeste-startup-error.txt.";
 
-                SDL2.SDL.SDL_ShowSimpleMessageBox(
-                    SDL2.SDL.SDL_MessageBoxFlags.SDL_MESSAGEBOX_ERROR,
+                IOSSDLInterop.ShowMessageBox(
+                    IOSSDLInterop.MessageBoxError,
                     "Celeste could not start",
                     message,
                     IntPtr.Zero);

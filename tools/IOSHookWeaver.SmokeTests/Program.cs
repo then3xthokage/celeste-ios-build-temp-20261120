@@ -6,9 +6,11 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 using celestemeow;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -20,6 +22,8 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        VerifyIOSSDLHostBoundary();
+        VerifyLauncherProjectBoundary();
         VerifyBundledRuntimeAssemblyResolver();
         VerifyDependencyResolver();
         string projectDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
@@ -351,8 +355,70 @@ internal static class Program
         AssertEqual("rewritten Windows HLS import remains hookable", "007F7F86/1", $"{colorHookValue:X8}/{colorHookCalls}");
         AssertEqual("Everest legacy On removal", "007F7F7F", colorAfterRemoval.ToString("X8"));
 
-        Console.WriteLine("Typed hook smoke passed: woven=" + wovenCount + "; patched Everest On/IL integration and removal; full-body Everest constructor wrappers with branches; open generic IL, reflected On hooks, and detours across generic methods and declaring types; native decoder imports; hookable Windows HLS import shim; app-bundle and in-memory mod dependency resolution; ref-return, exact ref-readonly modifiers, in/ref, Span, pointer and function-pointer signatures; value-type instance detours and constructors; branchy and generic constructor chains; static constructors; generic type/method combinations; reflected callbacks; and cross-load-context dispatch.");
+        Console.WriteLine("Typed hook smoke passed: woven=" + wovenCount + "; patched Everest On/IL integration and removal; full-body Everest constructor wrappers with branches; direct LegacyDetour constructor calls and original trampolines; open generic IL, reflected On hooks, and detours across generic methods and declaring types; native decoder imports; hookable Windows HLS import shim; app-bundle and in-memory mod dependency resolution; ref-return, exact ref-readonly modifiers, in/ref, Span, pointer and function-pointer signatures; value-type instance detours and constructors; branchy and generic constructor chains; static constructors; generic type/method combinations; reflected callbacks; and cross-load-context dispatch.");
         return 0;
+    }
+
+    private static void VerifyIOSSDLHostBoundary()
+    {
+        VerifySDLImport("SetHintNative", "SDL_SetHint");
+        VerifySDLImport("UIKitRunAppNative", "SDL_UIKitRunApp");
+        VerifySDLImport("ShowMessageBoxNative", "SDL_ShowSimpleMessageBox");
+
+        UnmanagedFunctionPointerAttribute callback = typeof(IOSSDLInterop.SDLMainFunction)
+            .GetCustomAttribute<UnmanagedFunctionPointerAttribute>();
+        if (callback == null || callback.CallingConvention != CallingConvention.Cdecl)
+            throw new InvalidOperationException("The SDL iOS main callback must use the C calling convention.");
+        if (IOSSDLInterop.MessageBoxError != 0x10)
+            throw new InvalidOperationException("The SDL error dialog flag does not match SDL_MESSAGEBOX_ERROR.");
+
+        Console.WriteLine("PASS launcher SDL calls use direct __Internal imports without a static FNA dependency.");
+    }
+
+    private static void VerifySDLImport(string methodName, string entryPoint)
+    {
+        MethodInfo method = typeof(IOSSDLInterop).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
+        DllImportAttribute import = method?.GetCustomAttribute<DllImportAttribute>();
+        if (import == null || !string.Equals(import.Value, "__Internal", StringComparison.Ordinal) ||
+            !string.Equals(import.EntryPoint, entryPoint, StringComparison.Ordinal) ||
+            import.CallingConvention != CallingConvention.Cdecl)
+            throw new InvalidOperationException("The launcher SDL import is not configured correctly: " + methodName);
+    }
+
+    private static void VerifyLauncherProjectBoundary()
+    {
+        string smokeProjectDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
+        string repositoryDirectory = Path.GetFullPath(Path.Combine(smokeProjectDirectory, "..", ".."));
+        string appProjectPath = Path.Combine(repositoryDirectory, "celestemeow", "ci-ios.csproj");
+        XDocument appProject = XDocument.Load(appProjectPath);
+        string[] references = appProject.Descendants("Reference")
+            .Select(item => (string)item.Attribute("Include"))
+            .Where(include => !string.IsNullOrWhiteSpace(include))
+            .ToArray();
+        foreach (string gameAssembly in new[] { "Celeste", "FNA", "Celeste.Mod.mm" })
+        {
+            if (references.Any(include => string.Equals(include, gameAssembly, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("The launcher must not statically load " + gameAssembly + " before its resolver starts.");
+        }
+
+        XElement[] bundleResources = appProject.Descendants("BundleResource").ToArray();
+        AssertBundleResource(bundleResources, "RuntimeAssemblies/Celeste.dll", "Celeste.dll");
+        AssertBundleResource(bundleResources, "RuntimeAssemblies/FNA.dll", "RuntimeAssemblies/FNA.dll");
+
+        string mainSource = File.ReadAllText(Path.Combine(repositoryDirectory, "celestemeow", "Main.cs"));
+        if (mainSource.Contains("SDL2.SDL.", StringComparison.Ordinal) || mainSource.Contains("using SDL2;", StringComparison.Ordinal))
+            throw new InvalidOperationException("The launcher must not reference SDL through FNA before Celeste loads.");
+
+        Console.WriteLine("PASS launcher project keeps Celeste and FNA dynamic and bundles their runtime files at resolver paths.");
+    }
+
+    private static void AssertBundleResource(IEnumerable<XElement> resources, string include, string link)
+    {
+        XElement resource = resources.FirstOrDefault(item =>
+            string.Equals((string)item.Attribute("Include"), include, StringComparison.Ordinal));
+        string actualLink = resource == null ? null : (string)resource.Attribute("Link") ?? (string)resource.Element("Link");
+        if (!string.Equals(actualLink, link, StringComparison.Ordinal))
+            throw new InvalidOperationException("The launcher project does not bundle " + include + " at " + link + ".");
     }
 
     private static void VerifyBundledRuntimeAssemblyResolver()
@@ -386,9 +452,10 @@ internal static class Program
             throw new InvalidOperationException("The launcher did not locate Celeste.dll at the app bundle root.");
 
         AssemblyLoadContext context = new AssemblyLoadContext("NestedRuntimeResolverSmoke", isCollectible: true);
+        List<string> resolverTrace = new List<string>();
         try
         {
-            IOSRuntimeAssemblyResolver.Attach(context, appBundle, null);
+            IOSRuntimeAssemblyResolver.Attach(context, appBundle, resolverTrace.Add);
             Assembly gameFixture = context.LoadFromAssemblyPath(locatedGameAssembly);
             if (!string.Equals(gameFixture.GetName().Name, "Celeste", StringComparison.Ordinal))
                 throw new InvalidOperationException("The launcher loaded the wrong assembly from the app bundle root.");
@@ -404,6 +471,18 @@ internal static class Program
             string everestValue = (string)everestProbe.GetProperty("Value").GetValue(null);
             if (everestValue != "loaded from RuntimeAssemblies/Everest")
                 throw new InvalidOperationException("The nested Everest resolver loaded the wrong assembly.");
+
+            try
+            {
+                context.LoadFromAssemblyName(new AssemblyName("MissingRuntimeResolverFixture"));
+                throw new InvalidOperationException("The resolver unexpectedly loaded a missing assembly.");
+            }
+            catch (FileNotFoundException)
+            {
+            }
+            if (!resolverTrace.Any(message => message.Contains(
+                    "Could not resolve managed assembly MissingRuntimeResolverFixture", StringComparison.Ordinal)))
+                throw new InvalidOperationException("The runtime resolver did not log the searched paths for a missing assembly.");
         }
         finally
         {
@@ -412,7 +491,7 @@ internal static class Program
             catch { }
         }
 
-        Console.WriteLine("PASS iOS runtime resolver locates Celeste.dll at the app bundle root and loads FNA and Everest assemblies from their bundled folders.");
+        Console.WriteLine("PASS iOS runtime resolver loads Celeste, FNA, and Everest from the app bundle and logs searched paths for missing assemblies.");
     }
 
     private static byte[] ApplyEverestStyleConstructorShape(byte[] source)
@@ -869,6 +948,35 @@ internal static class Program
         object afterRemoval = Activator.CreateInstance(targetType);
         AssertEqual("Everest public LegacyDetour removal", "7",
             targetMethod.Invoke(afterRemoval, new object[] { 2 }).ToString());
+
+        Type constructorTargetType = targetAssembly.GetType("LegacyConstructorDetourTarget", true);
+        ConstructorInfo constructorTarget = constructorTargetType.GetConstructor(new[] { typeof(int) });
+        MethodInfo constructorReplacement = constructorTargetType.GetMethod("DetourConstructor", BindingFlags.Public | BindingFlags.Static);
+        object constructorDetour = constructor.Invoke(new object[] { constructorTarget, constructorReplacement });
+        try
+        {
+            object constructed = constructorTarget.Invoke(new object[] { 4 });
+            AssertEqual("Everest public LegacyDetour constructor route", "40",
+                constructorTargetType.GetField("Value").GetValue(constructed).ToString());
+
+            Type constructorOriginalType = targetAssembly.GetType("LegacyConstructorOriginal", true);
+            MethodInfo constructorGenerateTrampoline = legacyDetourType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Single(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition &&
+                    method.GetGenericArguments().Length == 1 && method.GetParameters().Length == 0);
+            Delegate constructorTrampoline = (Delegate)constructorGenerateTrampoline.MakeGenericMethod(constructorOriginalType)
+                .Invoke(constructorDetour, null);
+            object trampolineTarget = constructorTarget.Invoke(new object[] { 0 });
+            constructorTrampoline.DynamicInvoke(new[] { trampolineTarget, (object)7 });
+            AssertEqual("Everest LegacyDetour constructor trampoline", "7",
+                constructorTargetType.GetField("Value").GetValue(trampolineTarget).ToString());
+        }
+        finally
+        {
+            legacyDetourType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance).Invoke(constructorDetour, null);
+        }
+        object afterConstructorRemoval = constructorTarget.Invoke(new object[] { 6 });
+        AssertEqual("Everest LegacyDetour constructor removal", "6",
+            constructorTargetType.GetField("Value").GetValue(afterConstructorRemoval).ToString());
 
         Type chainOriginalDelegateType = targetAssembly.GetType("LegacyDetourOriginal", true);
         MethodInfo chainGenerateTrampoline = legacyDetourType.GetMethods(BindingFlags.Public | BindingFlags.Instance)

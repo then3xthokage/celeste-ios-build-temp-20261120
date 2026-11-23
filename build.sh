@@ -612,6 +612,7 @@ copy_game_files "$script_dir/celeste/Celeste.dll.config" "$script_dir/celestemeo
 runtime_resource_dir="$script_dir/celestemeow/RuntimeAssemblies"
 rm -rf "$runtime_resource_dir"
 mkdir -p "$runtime_resource_dir/Everest"
+copy_game_files "$script_dir/celeste/Celeste.dll" "$runtime_resource_dir/Celeste.dll"
 copy_game_files "$script_dir/celeste/FNA.dll" "$runtime_resource_dir/FNA.dll"
 for runtime_assembly in "$everest_runtime"/*.dll; do
 	copy_game_files "$runtime_assembly" "$runtime_resource_dir/Everest/"

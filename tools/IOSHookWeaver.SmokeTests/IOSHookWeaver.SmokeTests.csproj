@@ -17,6 +17,7 @@
     <Compile Include="../../celestemeow/IOSHookRuntime.cs" Link="IOSHookRuntime.cs" />
     <Compile Include="../../celestemeow/IOSILHookRuntime.cs" Link="IOSILHookRuntime.cs" />
     <Compile Include="../../celestemeow/IOSRuntimeAssemblyResolver.cs" Link="IOSRuntimeAssemblyResolver.cs" />
+    <Compile Include="../../celestemeow/IOSSDLInterop.cs" Link="IOSSDLInterop.cs" />
     <Compile Include="../../celestemeow/ModDependencyResolver.cs" Link="ModDependencyResolver.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>

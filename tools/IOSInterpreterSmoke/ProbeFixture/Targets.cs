@@ -47,6 +47,23 @@ public static class ProbeTarget
     public static int Constant() => 5;
 }
 
+public sealed class ProbeLegacyConstructorDetourTarget
+{
+    public int Value;
+
+    public ProbeLegacyConstructorDetourTarget(int value)
+    {
+        Value = value;
+    }
+
+    public static void DetourConstructor(ProbeLegacyConstructorDetourTarget target, int value)
+    {
+        target.Value = value * 10;
+    }
+}
+
+public delegate void ProbeLegacyConstructorOriginal(ProbeLegacyConstructorDetourTarget target, int value);
+
 public static unsafe class ProbeManagedCalli
 {
     public static int Invoke(int value)

@@ -1733,8 +1733,8 @@ namespace celestemeow
 
         private static void ValidateDetourSignature(MethodBase target, MethodInfo replacement, bool bindsOriginalInstance)
         {
-            if (target is ConstructorInfo)
-                throw new NotSupportedException("Constructor detours require an explicit iOS constructor gate: " + target);
+            if (!(target is MethodInfo) && !(target is ConstructorInfo))
+                throw new NotSupportedException("The iOS detour target is not a managed method or constructor: " + target);
             if (target.IsStatic && !replacement.IsStatic)
                 throw new InvalidOperationException("A static method cannot be used as the instance target of a detour on " + target + ".");
             if (bindsOriginalInstance && !replacement.IsStatic &&
@@ -1745,7 +1745,7 @@ namespace celestemeow
             if (replacementParameters.Length != targetParameters.Length +
                 (target.IsStatic || bindsOriginalInstance ? 0 : 1))
                 throw new InvalidOperationException("The detour signature does not match " + target + ".");
-            Type targetReturn = ((MethodInfo)target).ReturnType;
+            Type targetReturn = target is MethodInfo targetMethod ? targetMethod.ReturnType : typeof(void);
             if (replacement.ReturnType != targetReturn)
                 throw new InvalidOperationException("The detour return type does not match " + target + ".");
             int start = bindsOriginalInstance || target.IsStatic ? 0 : 1;
@@ -1801,7 +1801,11 @@ namespace celestemeow
             if (woven > 0)
                 Console.WriteLine("iOS hook backend wove " + woven + " methods in mod assembly " + assemblyName + ".");
             if (skipped.Length > 0)
+            {
                 Console.WriteLine("iOS hook backend left " + skipped.Length + " unsupported method bodies unhookable in " + assemblyName + ".");
+                foreach (string method in skipped)
+                    Console.WriteLine("iOS hook backend skipped: " + method);
+            }
             return result;
         }
     }

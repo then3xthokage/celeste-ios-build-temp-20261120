@@ -218,6 +218,36 @@ public static class RuntimeProbe
         }
         AssertEqual("Everest LegacyDetour removal", 10, add.Invoke(null, new object[] { 6, 4 }));
 
+        Mark("Everest public constructor detour and trampoline on iOS interpreter");
+        Type constructorDetourTargetType = fixture.GetType("ProbeLegacyConstructorDetourTarget", throwOnError: true);
+        ConstructorInfo constructorDetourTarget = constructorDetourTargetType.GetConstructor(new[] { typeof(int) })
+            ?? throw new MissingMethodException(constructorDetourTargetType.FullName, ".ctor(Int32)");
+        MethodInfo constructorDetourReplacement = constructorDetourTargetType.GetMethod("DetourConstructor", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new MissingMethodException(constructorDetourTargetType.FullName, "DetourConstructor");
+        object constructorDetour = legacyConstructor.Invoke(new object[] { constructorDetourTarget, constructorDetourReplacement });
+        try
+        {
+            object constructed = constructorDetourTarget.Invoke(new object[] { 4 });
+            AssertEqual("Everest LegacyDetour constructor route", 40,
+                constructorDetourTargetType.GetField("Value").GetValue(constructed));
+
+            Type constructorOriginalType = fixture.GetType("ProbeLegacyConstructorOriginal", throwOnError: true);
+            Delegate constructorTrampoline = (Delegate)legacyTrampolineFactory.MakeGenericMethod(constructorOriginalType)
+                .Invoke(constructorDetour, null);
+            object trampolineTarget = constructorDetourTarget.Invoke(new object[] { 0 });
+            constructorTrampoline.DynamicInvoke(new object[] { trampolineTarget, 7 });
+            AssertEqual("Everest LegacyDetour constructor trampoline", 7,
+                constructorDetourTargetType.GetField("Value").GetValue(trampolineTarget));
+        }
+        finally
+        {
+            legacyDetourType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+                .Invoke(constructorDetour, null);
+        }
+        object afterConstructorDetour = constructorDetourTarget.Invoke(new object[] { 6 });
+        AssertEqual("Everest LegacyDetour constructor removal", 6,
+            constructorDetourTargetType.GetField("Value").GetValue(afterConstructorDetour));
+
         Mark("legacy trampoline tracks downstream hook removal on iOS interpreter");
         object firstDetour = legacyConstructor.Invoke(new object[] {
             add, targetType.GetMethod("DetourAddTwenty", BindingFlags.Public | BindingFlags.Static) });

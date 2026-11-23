@@ -10,6 +10,9 @@ import zipfile
 
 ARM64 = 0x0100000C
 REQUIRED_SYMBOLS = (
+    "_SDL_SetHint",
+    "_SDL_UIKitRunApp",
+    "_SDL_ShowSimpleMessageBox",
     "_tf_gettheorasize",
     "_tf_granpos_dec",
     "_tf_readaudio2",
@@ -56,13 +59,18 @@ def verify_managed_bundle(path):
             "RuntimeAssemblies/FNA.dll",
             "RuntimeAssemblies/Everest/Celeste.Mod.mm.dll",
             "RuntimeAssemblies/Everest/MonoMod.RuntimeDetour.dll",
+            "celeste/mscorlib.dll",
+            "celeste/Celeste.Content.dll",
+            "celeste/Celeste.dll.config",
         )
         missing = [bundle_root + name for name in required if bundle_root + name not in names]
         if missing:
-            raise ValueError("iOS app bundle is missing managed runtime assemblies: " + ", ".join(missing))
+            raise ValueError("iOS app bundle is missing required game/runtime files: " + ", ".join(missing))
         for name in required:
             if archive.getinfo(bundle_root + name).file_size == 0:
-                raise ValueError("iOS app bundle contains an empty managed assembly: " + bundle_root + name)
+                raise ValueError("iOS app bundle contains an empty required game/runtime file: " + bundle_root + name)
+        if not any(name.startswith(bundle_root + "Content/") and not name.endswith("/") for name in names):
+            raise ValueError("iOS app bundle is missing Celeste's Content files.")
 
 
 def read_uleb(data, offset):

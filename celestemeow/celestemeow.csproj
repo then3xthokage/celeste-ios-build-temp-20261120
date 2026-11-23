@@ -177,6 +177,7 @@
     </ItemGroup>
     <ItemGroup>
         <Compile Include="Main.cs" />
+        <Compile Include="IOSSDLInterop.cs" />
     </ItemGroup>
     <Import Project="$(XamarinIOSMSBuildTargetsPath)" Condition=" '$(XamarinIOSMSBuildTargetsPath)' != '' " />
     <Import Project="$(MSBuildExtensionsPath)\Xamarin\iOS\Xamarin.iOS.CSharp.targets" Condition=" '$(XamarinIOSMSBuildTargetsPath)' == '' " />

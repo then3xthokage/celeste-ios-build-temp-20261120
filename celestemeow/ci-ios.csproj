@@ -27,20 +27,10 @@
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
     <PackageReference Include="YamlDotNet" Version="16.1.3" />
     <PackageReference Include="KeraLua" Version="1.4.7" />
-    <Reference Include="FNA">
-      <HintPath>../celeste/FNA.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Celeste">
-      <HintPath>../celeste/Celeste.dll</HintPath>
-    </Reference>
-    <Reference Include="Celeste.Mod.mm">
-      <HintPath>../EverestRuntime/Celeste.Mod.mm.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
     <ImageAsset Include="Assets.xcassets/**/*" />
     <BundleResource Include="Content/**/*" TargetPath="Content/%(RecursiveDir)%(Filename)%(Extension)" />
-    <BundleResource Include="RuntimeAssemblies/FNA.dll" TargetPath="FNA.dll" />
+    <BundleResource Include="RuntimeAssemblies/Celeste.dll" Link="Celeste.dll" />
+    <BundleResource Include="RuntimeAssemblies/FNA.dll" Link="RuntimeAssemblies/FNA.dll" />
     <BundleResource Include="RuntimeAssemblies/Everest/*.dll" TargetPath="%(Filename)%(Extension)" />
     <BundleResource Include="celeste/mscorlib.dll" />
     <BundleResource Include="celeste/Celeste.Content.dll" />
@@ -94,6 +84,9 @@
 
   <ItemGroup>
     <LinkerArgument Include="-lc++" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_SDL_SetHint" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_SDL_UIKitRunApp" />
+    <LinkerArgument Include="-Wl,-exported_symbol,_SDL_ShowSimpleMessageBox" />
     <LinkerArgument Include="-Wl,-exported_symbol,_tf_gettheorasize" />
     <LinkerArgument Include="-Wl,-exported_symbol,_tf_granpos_dec" />
     <LinkerArgument Include="-Wl,-exported_symbol,_tf_readaudio2" />

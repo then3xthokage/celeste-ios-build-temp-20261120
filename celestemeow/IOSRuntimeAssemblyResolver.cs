@@ -87,6 +87,8 @@ namespace celestemeow
                     return assembly;
             }
 
+            SafeTrace(trace, "Could not resolve managed assembly " + requested.FullName + "; searched " +
+                string.Join(", ", directories));
             return null;
         }
 
@@ -103,16 +105,28 @@ namespace celestemeow
             {
                 AssemblyName candidate = AssemblyName.GetAssemblyName(path);
                 if (!string.Equals(candidate.Name, requested.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    SafeTrace(trace, "Skipping bundled assembly " + path + ": requested name " +
+                        requested.Name + ", file contains " + candidate.Name + ".");
                     return null;
+                }
 
                 if (requested.Version != null && candidate.Version != null && candidate.Version < requested.Version)
+                {
+                    SafeTrace(trace, "Skipping bundled assembly " + path + ": requested version " +
+                        requested.Version + ", file contains older version " + candidate.Version + ".");
                     return null;
+                }
 
                 byte[] requestedToken = requested.GetPublicKeyToken();
                 byte[] candidateToken = candidate.GetPublicKeyToken();
                 if (requestedToken != null && requestedToken.Length != 0 &&
                     !BytesEqual(requestedToken, candidateToken))
+                {
+                    SafeTrace(trace, "Skipping bundled assembly " + path + ": its public key token does not match " +
+                        requested.FullName + ".");
                     return null;
+                }
 
                 Assembly assembly = context.LoadFromAssemblyPath(Path.GetFullPath(path));
                 SafeTrace(trace, "Resolved managed assembly " + requested.FullName + " from " + path);
