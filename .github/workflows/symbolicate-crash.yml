@@ -15,17 +15,19 @@ jobs:
   symbolicate:
     if: github.ref == 'refs/heads/celeste-ios-build'
     runs-on: macos-15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
       - name: Download private iOS symbols
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           SYMBOLS_RUN_ID: ${{ inputs.symbols_run_id }}
         run: |
           set -euo pipefail
-          storage_repo="hbashton/celeste-ios-ci-temp-20261120"
+          output_repo="$GITHUB_REPOSITORY"
           symbols_dir="$RUNNER_TEMP/celeste-ios-symbols"
           if ! [[ "$SYMBOLS_RUN_ID" =~ ^[0-9]+$ ]]; then
             echo "symbols_run_id must contain digits only." >&2
@@ -33,7 +35,7 @@ jobs:
           fi
           mkdir -p "$symbols_dir"
           gh release download celeste-ios-build-output \
-            --repo "$storage_repo" \
+            --repo "$output_repo" \
             --pattern "ci-ios-symbols-${SYMBOLS_RUN_ID}.zip" \
             --dir "$symbols_dir"
           unzip -q "$symbols_dir/ci-ios-symbols-${SYMBOLS_RUN_ID}.zip" -d "$symbols_dir"
@@ -77,12 +79,12 @@ jobs:
       - name: Store symbolicated stack privately
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh release upload celeste-ios-build-output \
             "$RUNNER_TEMP/symbolicated-launch-crash-$GITHUB_RUN_ID.txt" \
-            --repo hbashton/celeste-ios-ci-temp-20261120
+            --repo "$GITHUB_REPOSITORY"
 
       - name: Remove private symbols from the runner
         if: always()

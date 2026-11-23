@@ -59,6 +59,8 @@ jobs:
     if: github.ref == 'refs/heads/celeste-ios-build'
     runs-on: macos-26
     timeout-minutes: 240
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -93,12 +95,11 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
-          PRIVATE_STORAGE_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
           CACHE_KEY: ${{ secrets.GAME_CACHE_KEY }}
           PRIVATE_STORAGE_REPO: hbashton/celeste-ios-ci-temp-20261120
         run: |
           set -euo pipefail
-          if [ -z "${PRIVATE_STORAGE_TOKEN:-}" ]; then
+          if [ -z "${GH_TOKEN:-}" ]; then
             echo "Add the PRIVATE_STORAGE_TOKEN Actions secret before starting a build." >&2
             exit 1
           fi
@@ -109,17 +110,6 @@ jobs:
           if ! gh api "repos/$PRIVATE_STORAGE_REPO/releases/tags/celeste-input" --jq '.tag_name' >/dev/null 2>&1; then
             echo "PRIVATE_STORAGE_TOKEN cannot read the private input release. Check that its resource owner is hbashton, its repository selection includes celeste-ios-ci-temp-20261120, and Contents has read access." >&2
             exit 1
-          fi
-          output_tag="celeste-ios-build-output"
-          if ! gh release view "$output_tag" --repo "$PRIVATE_STORAGE_REPO" >/dev/null 2>&1; then
-            if ! gh release create "$output_tag" \
-              --repo "$PRIVATE_STORAGE_REPO" \
-              --title "Latest Celeste iOS IPA" \
-              --notes "Private build output. Replaced by each successful run." \
-              --target celeste-ios-build; then
-              echo "PRIVATE_STORAGE_TOKEN can read private files but cannot create the private IPA release. Grant Contents write access to the private storage repository." >&2
-              exit 1
-            fi
           fi
 
       - name: Restore encrypted private input cache
@@ -441,61 +431,56 @@ jobs:
         if: vars.CELESTE_MOD_COMPATIBILITY_VERIFIED == 'true'
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          storage_repo="hbashton/celeste-ios-ci-temp-20261120"
+          output_repo="$GITHUB_REPOSITORY"
           output_tag="celeste-ios-build-output"
-          if ! gh release view "$output_tag" --repo "$storage_repo" >/dev/null 2>&1; then
+          if ! gh release view "$output_tag" --repo "$output_repo" >/dev/null 2>&1; then
             gh release create "$output_tag" \
-              --repo "$storage_repo" \
+              --repo "$output_repo" \
               --title "Latest Celeste iOS IPA" \
               --notes "Private build output. Replaced by each successful run." \
-              --target celeste-ios-build
+              --target "$GITHUB_REF_NAME"
           fi
           gh release upload "$output_tag" "$GITHUB_WORKSPACE/celestemeow.ipa" \
-            --repo "$storage_repo" \
+            --repo "$output_repo" \
             --clobber
 
       - name: Store IPA in private device-test release
         if: inputs.publish_device_test_ipa == true
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          storage_repo="hbashton/celeste-ios-ci-temp-20261120"
+          output_repo="$GITHUB_REPOSITORY"
           output_tag="celeste-ios-device-test-output"
-          target_branch="$(gh api "repos/$storage_repo" --jq '.default_branch')"
-          if [ -z "$target_branch" ]; then
-            echo "Could not determine the private storage repository's default branch." >&2
-            exit 1
-          fi
-          if ! gh release view "$output_tag" --repo "$storage_repo" >/dev/null 2>&1; then
+          if ! gh release view "$output_tag" --repo "$output_repo" >/dev/null 2>&1; then
             gh release create "$output_tag" \
-              --repo "$storage_repo" \
+              --repo "$output_repo" \
               --title "Celeste iOS device-test build" \
               --notes "Private, non-certified device-test IPA. This build is for collecting on-device compatibility results and does not represent full mod compatibility." \
-              --target "$target_branch"
+              --target "$GITHUB_REF_NAME"
           fi
           gh release upload "$output_tag" "$GITHUB_WORKSPACE/celestemeow.ipa" \
-            --repo "$storage_repo" \
+            --repo "$output_repo" \
             --clobber
 
       - name: Preserve matching iOS crash symbols
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          storage_repo="hbashton/celeste-ios-ci-temp-20261120"
+          output_repo="$GITHUB_REPOSITORY"
           output_tag="celeste-ios-build-output"
-          if ! gh release view "$output_tag" --repo "$storage_repo" >/dev/null 2>&1; then
+          if ! gh release view "$output_tag" --repo "$output_repo" >/dev/null 2>&1; then
             gh release create "$output_tag" \
-              --repo "$storage_repo" \
+              --repo "$output_repo" \
               --title "Latest Celeste iOS IPA and crash symbols" \
               --notes "Private build output. The IPA remains gated on completed compatibility verification; matching dSYM archives are retained for device crash reports." \
-              --target celeste-ios-build
+              --target "$GITHUB_REF_NAME"
           fi
           symbol_dir="$(find "$GITHUB_WORKSPACE/celestemeow/bin" -type d -name 'ci-ios.app.dSYM' -print -quit)"
           if [ -z "$symbol_dir" ]; then
@@ -510,7 +495,7 @@ jobs:
           xcrun dwarfdump --uuid "$dwarf_file"
           symbol_archive="$RUNNER_TEMP/ci-ios-symbols-$GITHUB_RUN_ID.zip"
           ditto -c -k --keepParent "$symbol_dir" "$symbol_archive"
-          gh release upload "$output_tag" "$symbol_archive" --repo "$storage_repo"
+          gh release upload "$output_tag" "$symbol_archive" --repo "$output_repo"
 
       - name: Remove private build files from the runner
         if: always()
