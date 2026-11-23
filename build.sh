@@ -689,6 +689,9 @@ else
 		error "failed to align native libraries with FNA 24.01"
 		exit 1
 	fi
+	cd "$script_dir/fnalibs-ios-builder-celeste/FAudio" || cd_fail
+	apply_patch "$script_dir/patches/FAudio-static-alignment.patch"
+	cd "$script_dir/fnalibs-ios-builder-celeste" || cd_fail
 	if ! git -C "$script_dir/fnalibs-ios-builder-celeste/FNA3D" submodule sync --recursive || \
 	   ! git -C "$script_dir/fnalibs-ios-builder-celeste/FNA3D" submodule update --init --recursive; then
 		error "failed to align FNA3D's pinned shader and Vulkan dependencies"

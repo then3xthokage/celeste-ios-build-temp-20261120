@@ -297,7 +297,7 @@ jobs:
           set -euo pipefail
           builder_revision="$(git -C fnalibs-ios-builder-celeste rev-parse HEAD)"
           fna_revision="$(git -C FNA rev-parse HEAD)"
-          native_input_hash="${{ hashFiles('build.sh', 'patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'patches/fnalibs-ios-disable-opengl.patch', 'patches/Theorafile-VidPlayer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}"
+          native_input_hash="${{ hashFiles('build.sh', 'patches/FAudio-static-alignment.patch', 'patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'patches/fnalibs-ios-disable-opengl.patch', 'patches/Theorafile-VidPlayer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}"
           cache_key="celeste-ios-native-controller-only-v2-fna-24.01-$builder_revision-$fna_revision-$native_input_hash"
           echo "builder=$builder_revision" >> "$GITHUB_OUTPUT"
           echo "fna=$fna_revision" >> "$GITHUB_OUTPUT"
