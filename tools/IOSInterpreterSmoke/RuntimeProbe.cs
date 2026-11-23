@@ -105,6 +105,22 @@ public static class RuntimeProbe
         IOSHookRuntime.RemoveOn(add, hook);
         AssertEqual("On hook removal", 10, add.Invoke(null, new object[] { 6, 4 }));
 
+        Mark("generic detour trampoline on iOS interpreter");
+        object detourIdentity = new object();
+        IOSHookRuntime.AddDetour(add, targetType.GetMethod("DetourAdd", BindingFlags.Public | BindingFlags.Static),
+            detourIdentity, null);
+        AssertEqual("Managed detour on loaded mod image", 110, add.Invoke(null, new object[] { 6, 4 }));
+        Type trampolineType = fixture.GetType("ProbeAddOriginal", throwOnError: true);
+        Func<MethodBase, object, Type, Delegate> createTrampoline = AppDomain.CurrentDomain.GetData(
+            "Celeste.IOSHookRuntime.CreateDetourTrampoline") as Func<MethodBase, object, Type, Delegate>;
+        if (createTrampoline == null)
+            throw new InvalidOperationException("The iOS typed detour trampoline bridge was not registered.");
+        Delegate trampoline = createTrampoline(add, detourIdentity, trampolineType);
+        AssertEqual("GenerateTrampoline<T> continuation on iOS interpreter", 10,
+            trampoline.DynamicInvoke(new object[] { 6, 4 }));
+        IOSHookRuntime.RemoveDetour(add, detourIdentity);
+        AssertEqual("Managed detour removal after trampoline creation", 10, add.Invoke(null, new object[] { 6, 4 }));
+
         Mark("ILContext hook and removal");
         MethodInfo constant = targetType.GetMethod("Constant", BindingFlags.Public | BindingFlags.Static);
         ILContext.Manipulator editConstant = context =>
