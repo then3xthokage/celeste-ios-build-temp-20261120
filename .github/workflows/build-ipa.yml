@@ -286,14 +286,15 @@ jobs:
           xcrun simctl terminate "$device_id" "$bundle_id" || true
           xcrun simctl shutdown "$device_id" || true
 
-      - name: Prepare native library cache inputs
+      - name: Apply native library cache patch
+        shell: bash
+        run: git -C fnalibs-ios-builder-celeste apply ../patches/fnalibs-ios-disable-opengl.patch
+
+      - name: Prepare native library cache key
         id: native-revisions
         shell: bash
         run: |
           set -euo pipefail
-          # The native build applies this patch to buildlibs.sh. Apply it before
-          # hashing so the cache lookup uses the same source state as cache save.
-          git -C fnalibs-ios-builder-celeste apply ../patches/fnalibs-ios-disable-opengl.patch
           builder_revision="$(git -C fnalibs-ios-builder-celeste rev-parse HEAD)"
           fna_revision="$(git -C FNA rev-parse HEAD)"
           native_input_hash="${{ hashFiles('build.sh', 'patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'patches/fnalibs-ios-disable-opengl.patch', 'patches/Theorafile-VidPlayer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}"
