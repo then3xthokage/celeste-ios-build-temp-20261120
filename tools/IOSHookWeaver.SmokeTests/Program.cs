@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Threading;
@@ -88,6 +90,7 @@ internal static class Program
         VerifyChroniaExternalLinks(projectDirectory, configuration, fixtureOutput);
         IOSHookRuntime.ConfigureGameAssembly(targetPath);
         Assembly everestRuntime = LoadEverestRuntimeAssembly(projectDirectory, fixtureOutput, gameAssemblyPath);
+        VerifyEverestDualStackConnection(everestRuntime);
         VerifyEverestDependencyDownloaderHookGates(projectDirectory, configuration, gameAssemblyPath);
         VerifyLegacyDetourTrampoline(everestRuntime, targetAssembly);
 
@@ -699,6 +702,9 @@ internal static class Program
             if (!allMethods.Any(method => method.HasBody && method.Body.Instructions.Any(instruction =>
                 string.Equals(instruction.Operand as string, "EVEREST_TMPDIR", StringComparison.Ordinal))))
                 throw new InvalidOperationException("Everest does not honor the app-provided writable iOS temporary directory.");
+            if (!allMethods.Any(method => method.HasBody && method.Body.Instructions.Any(instruction =>
+                string.Equals(instruction.Operand as string, "Celeste.IOSHookRuntime.EverestDataPath", StringComparison.Ordinal))))
+                throw new InvalidOperationException("Everest does not honor the app-provided writable iOS mod directory.");
 
             TypeDefinition downloader = assembly.MainModule.GetType("Celeste.Mod.UI.OuiDependencyDownloader");
             MethodDefinition download = downloader?.Methods.FirstOrDefault(method => method.Name == "downloadDependency");
@@ -727,6 +733,48 @@ internal static class Program
         }
 
         Console.WriteLine("PASS Everest in-game dependency menu, catalog, writable-temp download, checksum/install, and iOS restart path are woven and wired (" + wovenCount + " methods woven).");
+    }
+
+    private static void VerifyEverestDualStackConnection(Assembly everestRuntime)
+    {
+        if (!Socket.OSSupportsIPv6)
+        {
+            Console.WriteLine("SKIP IPv6 socket fallback probe because this host does not support IPv6.");
+            return;
+        }
+
+        Type clientType = everestRuntime.GetType("Celeste.Mod.Helpers.CompressedHttpClient", true);
+        MethodInfo openConnection = clientType.GetMethod("OpenConnectionAsync", BindingFlags.NonPublic | BindingFlags.Static);
+        if (openConnection == null)
+            throw new MissingMethodException(clientType.FullName, "OpenConnectionAsync");
+
+        TcpListener listener = new TcpListener(IPAddress.IPv6Loopback, 0);
+        listener.Server.DualMode = false;
+        listener.Start();
+        try
+        {
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            Task<Socket> accepted = listener.AcceptSocketAsync();
+            Task<Stream> connected = (Task<Stream>)openConnection.Invoke(null, new object[]
+            {
+                new DnsEndPoint("localhost", port, AddressFamily.Unspecified),
+                CancellationToken.None
+            });
+
+            if (!connected.Wait(TimeSpan.FromSeconds(5)))
+                throw new TimeoutException("Everest did not connect to the IPv6-only local listener within five seconds.");
+            using (Stream client = connected.GetAwaiter().GetResult())
+            {
+                if (!accepted.Wait(TimeSpan.FromSeconds(5)))
+                    throw new TimeoutException("The IPv6-only local listener did not accept Everest's connection.");
+                using (Socket server = accepted.GetAwaiter().GetResult())
+                    Console.WriteLine("PASS Everest compressed HTTP client falls back to IPv6 when its IPv4-first connection fails.");
+            }
+        }
+        finally
+        {
+            listener.Stop();
+        }
     }
 
     private static void CallLegacyHookManager(Assembly everestRuntime, string methodName, MethodBase target, Delegate callback)

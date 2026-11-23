@@ -54,6 +54,86 @@ index e473aa50..e513e360 100644
 +            }
              scene.RunAfterRender = () => Engine.Instance.Exit();
              yield break;
+diff --git a/Celeste.Mod.mm/Mod/Helpers/CompressedHttpClient.cs b/Celeste.Mod.mm/Mod/Helpers/CompressedHttpClient.cs
+index ec688e99..5dac4177 100755
+--- a/Celeste.Mod.mm/Mod/Helpers/CompressedHttpClient.cs
++++ b/Celeste.Mod.mm/Mod/Helpers/CompressedHttpClient.cs
+@@ -1,2 +1,3 @@
+ ﻿using System;
++using System.IO;
+ using System.Net;
+@@ -5,2 +6,3 @@ using System.Net.Sockets;
+ using System.Threading;
++using System.Threading.Tasks;
+-
++
+@@ -8,3 +10,3 @@ namespace Celeste.Mod.Helpers {
+     /// <summary>
+-    /// An HttpClient that supports compressed responses to save bandwidth, and uses IPv4 to work around issues for some users.
++    /// An HttpClient that supports compressed responses to save bandwidth and works with IPv4 and IPv6 endpoints.
+     /// </summary>
+@@ -14,16 +16,48 @@ namespace Celeste.Mod.Helpers {
+             ConnectCallback = async delegate (SocketsHttpConnectionContext ctx, CancellationToken token) {
+-                if (ctx.DnsEndPoint.AddressFamily != AddressFamily.Unspecified && ctx.DnsEndPoint.AddressFamily != AddressFamily.InterNetwork) {
+-                    throw new InvalidOperationException("no IPv4 address");
+-                }
++                return await OpenConnectionAsync(ctx.DnsEndPoint, token).ConfigureAwait(false);
++            }
++        };
++
++        internal static async Task<Stream> OpenConnectionAsync(DnsEndPoint endpoint, CancellationToken token) {
++            if (endpoint == null)
++                throw new ArgumentNullException(nameof(endpoint));
++
++            if (endpoint.AddressFamily != AddressFamily.Unspecified &&
++                endpoint.AddressFamily != AddressFamily.InterNetwork &&
++                endpoint.AddressFamily != AddressFamily.InterNetworkV6) {
++                throw new InvalidOperationException($"Unsupported network address family {endpoint.AddressFamily}.");
++            }
+-
++
+-                Socket socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+-                try {
+-                    await socket.ConnectAsync(new DnsEndPoint(ctx.DnsEndPoint.Host, ctx.DnsEndPoint.Port, AddressFamily.InterNetwork), token).ConfigureAwait(false);
+-                    return new NetworkStream(socket, true);
+-                } catch (Exception) {
+-                    socket.Dispose();
+-                    throw;
++            IPAddress[] addresses = await Dns.GetHostAddressesAsync(endpoint.Host, token).ConfigureAwait(false);
++            AddressFamily firstFamily = endpoint.AddressFamily == AddressFamily.InterNetworkV6
++                ? AddressFamily.InterNetworkV6
++                : AddressFamily.InterNetwork;
++            AddressFamily secondFamily = firstFamily == AddressFamily.InterNetwork
++                ? AddressFamily.InterNetworkV6
++                : AddressFamily.InterNetwork;
++            Exception lastError = null;
++
++            foreach (AddressFamily family in new[] { firstFamily, secondFamily }) {
++                foreach (IPAddress address in addresses) {
++                    if (address.AddressFamily != family)
++                        continue;
++
++                    Socket socket = new Socket(family, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
++                    try {
++                        await socket.ConnectAsync(new IPEndPoint(address, endpoint.Port), token).ConfigureAwait(false);
++                        NetworkStream stream = new NetworkStream(socket, true);
++                        socket = null;
++                        return stream;
++                    } catch (SocketException exception) {
++                        lastError = exception;
++                    } finally {
++                        socket?.Dispose();
++                    }
+                 }
+             }
+-        };
++
++            if (lastError != null)
++                throw new HttpRequestException($"Could not connect to {endpoint.Host} over IPv4 or IPv6.", lastError);
++            throw new InvalidOperationException($"DNS returned no IPv4 or IPv6 address for {endpoint.Host}.");
++        }
+-
++
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
 index b82f6efc..d9286eed 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
