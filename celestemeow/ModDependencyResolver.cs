@@ -177,10 +177,30 @@ namespace celestemeow
         public void ApplyTo(string moduleName, List<ModDependency> dependencies, List<ModDependency> optionalDependencies)
         {
             if (string.IsNullOrWhiteSpace(moduleName)) return;
-            DependencyCatalogEntry entry;
-            if (!graph.TryGetValue(moduleName, out entry) || entry == null) return;
+            DependencyCatalogEntry entry = FindGraphEntry(moduleName);
+            if (entry == null) return;
             Merge(dependencies, entry.Dependencies);
             Merge(optionalDependencies, entry.OptionalDependencies);
+        }
+
+        private DependencyCatalogEntry FindGraphEntry(string name)
+        {
+            DependencyCatalogEntry exact;
+            if (graph.TryGetValue(name, out exact)) return exact;
+            string normalizedName = NormalizeName(name);
+            if (normalizedName.Length == 0) return null;
+            List<DependencyCatalogEntry> matches = graph
+                .Where(item => NormalizeName(item.Key) == normalizedName)
+                .Select(item => item.Value)
+                .Where(item => item != null)
+                .ToList();
+            return matches.Count == 1 ? matches[0] : null;
+        }
+
+        internal static string NormalizeName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return string.Empty;
+            return new string(name.Trim().Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
         }
 
         /// <summary>
@@ -217,8 +237,8 @@ namespace celestemeow
                 if (!visiting.Add(name))
                     throw new InvalidDataException("The required mod dependencies contain a cycle at " + name + ".");
 
-                DependencyCatalogEntry entry;
-                if (graph.TryGetValue(name, out entry) && entry != null)
+                DependencyCatalogEntry entry = FindGraphEntry(name);
+                if (entry != null)
                     foreach (ModDependency child in entry.Dependencies) visit(child);
 
                 if (manifestDependencies != null)
@@ -250,7 +270,9 @@ namespace celestemeow
                 .Select(group => group.First())
                 .ToList();
             HashSet<string> unavailable = new HashSet<string>(
-                (removedModuleNames ?? Enumerable.Empty<string>()).Where(name => !string.IsNullOrWhiteSpace(name)),
+                (removedModuleNames ?? Enumerable.Empty<string>())
+                    .Select(NormalizeName)
+                    .Where(name => name.Length > 0),
                 StringComparer.OrdinalIgnoreCase);
             List<string> disabled = new List<string>();
             bool changed;
@@ -260,12 +282,15 @@ namespace celestemeow
                 foreach (ModDependencyPackageState package in candidates)
                 {
                     if (!enabledPackages.Contains(package.PackageName)) continue;
-                    if (!package.RequiredModuleNames.Any(unavailable.Contains)) continue;
+                    if (!package.RequiredModuleNames.Any(name => unavailable.Contains(NormalizeName(name)))) continue;
 
                     enabledPackages.Remove(package.PackageName);
                     disabled.Add(package.PackageName);
                     foreach (string moduleName in package.ModuleNames)
-                        if (!string.IsNullOrWhiteSpace(moduleName)) unavailable.Add(moduleName);
+                    {
+                        string normalizedName = NormalizeName(moduleName);
+                        if (normalizedName.Length > 0) unavailable.Add(normalizedName);
+                    }
                     changed = true;
                 }
             } while (changed);

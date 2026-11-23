@@ -482,13 +482,6 @@ index 15b1c509..99c02240 100644
              foreach (Hook hook in Hooks.Values)
                  hook.Dispose();
              Hooks.Clear();
-@@ -100,4 +187,4 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             ILHooks.Clear();
-         }
-     }
--}
-\ No newline at end of file
-+}
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs
 index 1e53c174..470e5a15 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs
@@ -830,3 +823,61 @@ index 88c74c26..6e371243 100644
  
              new ILContext(method).Invoke(il => {
                  ILCursor cursor = new ILCursor(il);
+
+diff --git a/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs b/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
+index af74430c..f22b45b6 100644
+--- a/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
++++ b/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
+@@ -966,23 +966,46 @@ namespace Celeste.Mod {
+                 if (depName == CoreModule.NETCoreMetaName)
+                     depName = CoreModule.Instance.Metadata.Name;
+ 
++                string normalizedDependencyName = NormalizeDependencyName(depName);
++                EverestModule normalizedMatch = null;
++                bool exactModuleFound = false;
++                bool normalizedMatchAmbiguous = false;
+                 lock (_Modules) {
+                     foreach (EverestModule other in _Modules) {
+                         EverestModuleMetadata meta = other.Metadata;
+-                        if (meta.Name != depName)
++                        if (meta.Name == depName) {
++                            exactModuleFound = true;
++                            if (VersionSatisfiesDependency(depVersion, meta.Version)) {
++                                module = other;
++                                return true;
++                            }
+                             continue;
+-
+-                        Version version = meta.Version;
+-                        if (VersionSatisfiesDependency(depVersion, version)) {
+-                            module = other;
+-                            return true;
+                         }
++                        if (normalizedDependencyName.Length == 0 ||
++                            NormalizeDependencyName(meta.Name) != normalizedDependencyName ||
++                            !VersionSatisfiesDependency(depVersion, meta.Version))
++                            continue;
++
++                        if (normalizedMatch == null)
++                            normalizedMatch = other;
++                        else if (normalizedMatch.Metadata.Name != meta.Name)
++                            normalizedMatchAmbiguous = true;
+                     }
+                 }
++                if (!exactModuleFound && !normalizedMatchAmbiguous && normalizedMatch != null) {
++                    module = normalizedMatch;
++                    return true;
++                }
+                 module = null;
+                 return false;
+             }
+ 
++            private static string NormalizeDependencyName(string name) {
++                if (string.IsNullOrWhiteSpace(name))
++                    return string.Empty;
++                return new string(name.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
++            }
++
+             /// <summary>
+             /// Checks if the given version number is "compatible" with the one required as a dependency.
+             /// </summary>

@@ -83,6 +83,7 @@ namespace celestemeow
             public int AssemblyCount;
             public int AssetCount;
             public string Status;
+            public bool ManifestFallback;
             public List<ModMetadata> Modules = new List<ModMetadata>();
         }
 
@@ -317,7 +318,7 @@ namespace celestemeow
             try
             {
                 await DownloadWithMirrorsAsync(catalogMod.Url, catalogMod.MirrorName, tempPath, progress);
-                PackageInfo package = InspectArchive(tempPath);
+                PackageInfo package = InspectArchive(tempPath, catalogMod.Name);
                 HashSet<string> enabled = ReadEnabledNames();
                 List<string> dependenciesInstalled = await InstallRequiredDependenciesAsync(package, enabled, progress);
                 string destination = Path.Combine(ModsDirectory, SafeFileName(package.Name) + ".zip");
@@ -422,7 +423,7 @@ namespace celestemeow
                     string downloadedHash = ComputeXxHash64(tempPath);
                     if (!update.Hashes.Any(hash => string.Equals(hash, downloadedHash, StringComparison.OrdinalIgnoreCase)))
                         throw new InvalidDataException("The downloaded update did not match Everest's checksum for " + info.Name + ".");
-                    PackageInfo replacement = InspectArchive(tempPath);
+                    PackageInfo replacement = InspectArchive(tempPath, info.Name);
                     if (!string.Equals(replacement.Name, info.Name, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidDataException("The update package name did not match the installed mod.");
                     string backupPath = mod.Path + ".previous";
@@ -549,7 +550,7 @@ namespace celestemeow
             if (pendingModule != null && VersionSatisfies(dependency.Version, pendingModule.Version)) return;
 
             InstalledPackage current;
-            if (installed.TryGetValue(dependency.Name, out current))
+            if (TryGetInstalledPackage(installed, dependency.Name, out current))
             {
                 ModMetadata installedModule = FindModule(current.Package, dependency.Name);
                 if (installedModule != null && VersionSatisfies(dependency.Version, installedModule.Version))
@@ -577,7 +578,7 @@ namespace celestemeow
             try
             {
                 UpdateInfo update;
-                if (!catalog.TryGetValue(dependency.Name, out update) || update.Hashes.Count == 0)
+                if (!TryGetCatalogUpdate(catalog, dependency.Name, out update) || update.Hashes.Count == 0)
                     throw new FileNotFoundException("A required dependency could not be found in Everest's update catalog: " + dependency.Name + ".");
 
                 progress?.Report("Installing required dependency " + dependency.Name + "...");
@@ -589,7 +590,7 @@ namespace celestemeow
                     if (!update.Hashes.Any(expected => string.Equals(expected, hash, StringComparison.OrdinalIgnoreCase)))
                         throw new InvalidDataException("The dependency download checksum did not match Everest's catalog for " + dependency.Name + ".");
 
-                    PackageInfo package = InspectArchive(tempPath);
+                    PackageInfo package = InspectArchive(tempPath, dependency.Name);
                     ApplyDependencyGraph(package, dependencyGraphCache);
                     ModMetadata downloadedModule = FindModule(package, dependency.Name);
                     if (downloadedModule == null || !VersionSatisfies(dependency.Version, downloadedModule.Version))
@@ -683,7 +684,7 @@ namespace celestemeow
                 ModMetadata pending = FindModule(pendingPackage, name);
                 if (pending != null) return pending.Dependencies;
                 InstalledPackage candidate;
-                if (installed.TryGetValue(name, out candidate))
+                if (TryGetInstalledPackage(installed, name, out candidate))
                     return candidate.Package.Modules.SelectMany(module => module.Dependencies);
                 return null;
             });
@@ -701,7 +702,7 @@ namespace celestemeow
                 if (pending != null && VersionSatisfies(dependency.Version, pending.Version)) continue;
 
                 InstalledPackage candidate;
-                ModMetadata actual = installed.TryGetValue(dependency.Name, out candidate)
+                ModMetadata actual = TryGetInstalledPackage(installed, dependency.Name, out candidate)
                     ? FindModule(candidate.Package, dependency.Name)
                     : null;
                 if (actual == null || !VersionSatisfies(dependency.Version, actual.Version))
@@ -733,7 +734,7 @@ namespace celestemeow
                 foreach (ModDependency dependency in module.OptionalDependencies)
                 {
                     InstalledPackage optional;
-                    if (dependency != null && installed.TryGetValue(dependency.Name ?? "", out optional) && enabled.Contains(optional.Package.Name))
+                    if (dependency != null && TryGetInstalledPackage(installed, dependency.Name, out optional) && enabled.Contains(optional.Package.Name))
                         VisitDependency(dependency, package, installed, enabled, visiting, visited, order);
                 }
             }
@@ -768,7 +769,7 @@ namespace celestemeow
             }
 
             InstalledPackage dependencyPackage;
-            if (!installed.TryGetValue(dependency.Name, out dependencyPackage))
+            if (!TryGetInstalledPackage(installed, dependency.Name, out dependencyPackage))
                 throw new InvalidDataException(parent.Name + " requires " + dependency.Name + ", which is not installed.");
             ModMetadata dependencyModule = FindModule(dependencyPackage.Package, dependency.Name);
             if (dependencyModule == null || !VersionSatisfies(dependency.Version, dependencyModule.Version))
@@ -780,7 +781,66 @@ namespace celestemeow
 
         private static ModMetadata FindModule(PackageInfo package, string name)
         {
-            return package.Modules.FirstOrDefault(module => string.Equals(module.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (package == null || string.IsNullOrWhiteSpace(name)) return null;
+            ModMetadata exact = package.Modules.FirstOrDefault(module => string.Equals(module.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (exact != null) return exact;
+            string normalizedName = ModDependencyResolver.NormalizeName(name);
+            if (normalizedName.Length == 0) return null;
+            List<ModMetadata> matches = package.Modules
+                .Where(module => ModDependencyResolver.NormalizeName(module.Name) == normalizedName)
+                .ToList();
+            return matches.Count == 1 ? matches[0] : null;
+        }
+
+        private static bool TryGetInstalledPackage(
+            Dictionary<string, InstalledPackage> installed,
+            string moduleName,
+            out InstalledPackage package)
+        {
+            if (installed.TryGetValue(moduleName ?? "", out package)) return true;
+            string normalizedName = ModDependencyResolver.NormalizeName(moduleName);
+            if (normalizedName.Length == 0)
+            {
+                package = null;
+                return false;
+            }
+            List<InstalledPackage> matches = installed.Values
+                .Distinct()
+                .Where(candidate => FindModule(candidate.Package, moduleName) != null)
+                .ToList();
+            if (matches.Count == 1)
+            {
+                package = matches[0];
+                return true;
+            }
+            package = null;
+            return false;
+        }
+
+        private static bool TryGetCatalogUpdate(
+            Dictionary<string, UpdateInfo> catalog,
+            string moduleName,
+            out UpdateInfo update)
+        {
+            if (catalog.TryGetValue(moduleName ?? "", out update)) return true;
+            string normalizedName = ModDependencyResolver.NormalizeName(moduleName);
+            if (normalizedName.Length == 0)
+            {
+                update = null;
+                return false;
+            }
+            List<UpdateInfo> matches = catalog
+                .Where(item => ModDependencyResolver.NormalizeName(item.Key) == normalizedName)
+                .Select(item => item.Value)
+                .Where(item => item != null)
+                .ToList();
+            if (matches.Count == 1)
+            {
+                update = matches[0];
+                return true;
+            }
+            update = null;
+            return false;
         }
 
         private static bool IsBuiltInDependency(string name)
@@ -894,39 +954,63 @@ namespace celestemeow
             throw new IOException("The mod could not be downloaded from GameBanana or its mirrors.", lastError);
         }
 
-        private static PackageInfo InspectArchive(string path)
+        private static PackageInfo InspectArchive(string path, string fallbackName = null)
         {
             using (ZipArchive archive = ZipFile.OpenRead(path))
             {
                 ZipArchiveEntry descriptor = FindDescriptor(archive);
-                if (descriptor == null) throw new InvalidDataException("Root everest.yaml was not found.");
-                string yaml;
-                using (StreamReader reader = new StreamReader(descriptor.Open())) yaml = reader.ReadToEnd();
-                List<ModMetadata> modules;
+                List<ModMetadata> modules = null;
+                string manifestFailure = null;
                 try
                 {
+                    if (descriptor == null) throw new InvalidDataException("Root everest.yaml was not found.");
+                    string yaml;
+                    using (StreamReader reader = new StreamReader(descriptor.Open())) yaml = reader.ReadToEnd();
                     modules = MetadataDeserializer.Deserialize<List<ModMetadata>>(yaml);
+                    modules = (modules ?? new List<ModMetadata>()).Where(module => module != null && !string.IsNullOrWhiteSpace(module.Name)).ToList();
+                    if (modules.Count == 0) throw new InvalidDataException("everest.yaml does not define a mod name.");
+                    foreach (ModMetadata module in modules)
+                    {
+                        if (module.Version == null) module.Version = "1.0";
+                        else if (string.IsNullOrWhiteSpace(module.Version)) throw new InvalidDataException("everest.yaml contains an empty module version.");
+                        ParseVersion(module.Version, null);
+                        if (module.Dependencies == null) module.Dependencies = new List<ModDependency>();
+                        if (module.OptionalDependencies == null) module.OptionalDependencies = new List<ModDependency>();
+                        foreach (ModDependency dependency in module.Dependencies.Concat(module.OptionalDependencies))
+                        {
+                            if (dependency == null || string.IsNullOrWhiteSpace(dependency.Name))
+                                throw new InvalidDataException("everest.yaml contains a dependency without a name.");
+                            if (dependency.Version == null) dependency.Version = "1.0";
+                            else if (string.IsNullOrWhiteSpace(dependency.Version)) throw new InvalidDataException("everest.yaml contains an empty dependency version.");
+                            ParseVersion(dependency.Version, null);
+                        }
+                    }
                 }
                 catch (Exception exception)
                 {
-                    throw new InvalidDataException("everest.yaml could not be parsed.", exception);
+                    manifestFailure = exception.Message;
+                    modules = null;
                 }
-                modules = (modules ?? new List<ModMetadata>()).Where(module => module != null && !string.IsNullOrWhiteSpace(module.Name)).ToList();
-                if (modules.Count == 0) throw new InvalidDataException("everest.yaml does not define a mod name.");
-                foreach (ModMetadata module in modules)
+                bool manifestFallback = modules == null;
+                string fallbackPackageName = SafeFileName(string.IsNullOrWhiteSpace(fallbackName)
+                    ? Path.GetFileNameWithoutExtension(path)
+                    : fallbackName);
+                if (manifestFallback)
                 {
-                    if (string.IsNullOrWhiteSpace(module.Version)) module.Version = "1.0";
-                    ParseVersion(module.Version, null);
-                    if (module.Dependencies == null) module.Dependencies = new List<ModDependency>();
-                    if (module.OptionalDependencies == null) module.OptionalDependencies = new List<ModDependency>();
-                    foreach (ModDependency dependency in module.Dependencies.Concat(module.OptionalDependencies))
+                    // Everest's ZIP loader creates a dummy module when its root
+                    // manifest cannot be parsed, then still crawls the archive
+                    // for maps and assets. Match that behavior so malformed
+                    // campaign packages remain installable on iOS.
+                    modules = new List<ModMetadata>
                     {
-                        if (dependency == null || string.IsNullOrWhiteSpace(dependency.Name))
-                            throw new InvalidDataException("everest.yaml contains a dependency without a name.");
-                        if (!string.IsNullOrWhiteSpace(dependency.Version)) ParseVersion(dependency.Version, null);
-                    }
+                        new ModMetadata
+                        {
+                            Name = "_zip_" + fallbackPackageName,
+                            Version = "0.0.0-dummy"
+                        }
+                    };
                 }
-                string name = modules[0].Name.Trim();
+                string name = manifestFallback ? fallbackPackageName : modules[0].Name.Trim();
                 int mapCount = 0;
                 int assemblyCount = 0;
                 int assetCount = 0;
@@ -950,7 +1034,18 @@ namespace celestemeow
                 }
                 string status = mapCount + " map(s) · " + assemblyCount + " code assembly(s) · " + assetCount + " other file(s)";
                 if (modules.Count > 1) status += " · contains " + modules.Count + " mod modules";
-                return new PackageInfo { Name = name, MapCount = mapCount, AssemblyCount = assemblyCount, AssetCount = assetCount, Status = status, Modules = modules };
+                if (manifestFallback)
+                    status += " · Everest dummy-module fallback (" + manifestFailure + ")";
+                return new PackageInfo
+                {
+                    Name = name,
+                    MapCount = mapCount,
+                    AssemblyCount = assemblyCount,
+                    AssetCount = assetCount,
+                    Status = status,
+                    ManifestFallback = manifestFallback,
+                    Modules = modules
+                };
             }
         }
 
