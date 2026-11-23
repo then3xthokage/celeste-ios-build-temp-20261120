@@ -2,8 +2,7 @@ diff --git a/Celeste.Mod.mm/Celeste.Mod.mm.csproj b/Celeste.Mod.mm/Celeste.Mod.m
 index 058323b2..5cd163d4 100644
 --- a/Celeste.Mod.mm/Celeste.Mod.mm.csproj
 +++ b/Celeste.Mod.mm/Celeste.Mod.mm.csproj
-@@ -19,11 +19,13 @@
- 
+@@ -20,9 +20,11 @@
    <ItemGroup>
      <Reference Include="Celeste">
 -      <HintPath>..\lib-stripped\Celeste.exe</HintPath>
@@ -17,22 +16,73 @@ index 058323b2..5cd163d4 100644
 +      <HintPath Condition="'$(EverestFNAReference)' == ''">..\lib-stripped\FNA.dll</HintPath>
        <Private>False</Private>
      </Reference>
-     <Reference Include="Steamworks.NET">
+diff --git a/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs b/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
+index af74430c..f22b45b6 100644
+--- a/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
++++ b/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
+@@ -967,21 +967,44 @@ namespace Celeste.Mod {
+                     depName = CoreModule.Instance.Metadata.Name;
+ 
++                string normalizedDependencyName = NormalizeDependencyName(depName);
++                EverestModule normalizedMatch = null;
++                bool exactModuleFound = false;
++                bool normalizedMatchAmbiguous = false;
+                 lock (_Modules) {
+                     foreach (EverestModule other in _Modules) {
+                         EverestModuleMetadata meta = other.Metadata;
+-                        if (meta.Name != depName)
++                        if (meta.Name == depName) {
++                            exactModuleFound = true;
++                            if (VersionSatisfiesDependency(depVersion, meta.Version)) {
++                                module = other;
++                                return true;
++                            }
+                             continue;
+-
+-                        Version version = meta.Version;
+-                        if (VersionSatisfiesDependency(depVersion, version)) {
+-                            module = other;
+-                            return true;
+                         }
++                        if (normalizedDependencyName.Length == 0 ||
++                            NormalizeDependencyName(meta.Name) != normalizedDependencyName ||
++                            !VersionSatisfiesDependency(depVersion, meta.Version))
++                            continue;
++
++                        if (normalizedMatch == null)
++                            normalizedMatch = other;
++                        else if (normalizedMatch.Metadata.Name != meta.Name)
++                            normalizedMatchAmbiguous = true;
+                     }
+                 }
++                if (!exactModuleFound && !normalizedMatchAmbiguous && normalizedMatch != null) {
++                    module = normalizedMatch;
++                    return true;
++                }
+                 module = null;
+                 return false;
+             }
+ 
++            private static string NormalizeDependencyName(string name) {
++                if (string.IsNullOrWhiteSpace(name))
++                    return string.Empty;
++                return new string(name.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
++            }
++
+             /// <summary>
+             /// Checks if the given version number is "compatible" with the one required as a dependency.
 diff --git a/Celeste.Mod.mm/Mod/Everest/Everest.cs b/Celeste.Mod.mm/Mod/Everest/Everest.cs
-index e473aa50..e513e360 100644
+index e473aa50..92feb119 100644
 --- a/Celeste.Mod.mm/Mod/Everest/Everest.cs
 +++ b/Celeste.Mod.mm/Mod/Everest/Everest.cs
-@@ -31,7 +31,7 @@ namespace Celeste.Mod {
-         // NOTE: THIS MUST BE THE FIRST THING SET UP BY THE CLASS CONSTRUCTOR.
+@@ -32,5 +32,5 @@ namespace Celeste.Mod {
          // OTHERWISE OLYMPUS WON'T BE ABLE TO FIND THIS!
          // The following line gets replaced by the buildbot automatically.
 -        public readonly static string VersionString = "0.0.0-dev";
 +        public readonly static string VersionString = "1.6696.0-ios";
          /// <summary>
          /// The currently installed Everest build in string form.
-         /// </summary>
-@@ -350,7 +350,12 @@ namespace Celeste.Mod {
-             Assembly.Load("Newtonsoft.Json");
+@@ -351,5 +351,10 @@ namespace Celeste.Mod {
              Assembly.Load("Jdenticon");
  
 -            if (!File.Exists(Path.Combine(PathGame, "EverestXDGFlag"))) {
@@ -44,8 +94,9 @@ index e473aa50..e513e360 100644
 +            } else if (!File.Exists(Path.Combine(PathGame, "EverestXDGFlag"))) {
                  XDGPaths = false;
                  PathEverest = PathGame;
-             } else {
-@@ -897,3 +902,7 @@ namespace Celeste.Mod {
+@@ -895,5 +900,9 @@ namespace Celeste.Mod {
+             }
+ 
 -            Events.Celeste.OnShutdown += static () => BOOT.StartCelesteProcess();
 +            if (AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.RequestCelesteRestart") is Action iosRestart) {
 +                Events.Celeste.OnShutdown += iosRestart;
@@ -58,21 +109,23 @@ diff --git a/Celeste.Mod.mm/Mod/Helpers/CompressedHttpClient.cs b/Celeste.Mod.mm
 index ec688e99..5dac4177 100755
 --- a/Celeste.Mod.mm/Mod/Helpers/CompressedHttpClient.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/CompressedHttpClient.cs
-@@ -1,2 +1,3 @@
+@@ -1,11 +1,13 @@
  ﻿using System;
 +using System.IO;
  using System.Net;
-@@ -5,2 +6,3 @@ using System.Net.Sockets;
+ using System.Net.Http;
+ using System.Net.Sockets;
  using System.Threading;
 +using System.Threading.Tasks;
--
-+
-@@ -8,3 +10,3 @@ namespace Celeste.Mod.Helpers {
+ 
+ namespace Celeste.Mod.Helpers {
      /// <summary>
 -    /// An HttpClient that supports compressed responses to save bandwidth, and uses IPv4 to work around issues for some users.
 +    /// An HttpClient that supports compressed responses to save bandwidth and works with IPv4 and IPv6 endpoints.
      /// </summary>
-@@ -14,16 +16,48 @@ namespace Celeste.Mod.Helpers {
+     public class CompressedHttpClient : HttpClient {
+@@ -13,18 +15,50 @@ namespace Celeste.Mod.Helpers {
+             AutomaticDecompression = DecompressionMethods.All,
              ConnectCallback = async delegate (SocketsHttpConnectionContext ctx, CancellationToken token) {
 -                if (ctx.DnsEndPoint.AddressFamily != AddressFamily.Unspecified && ctx.DnsEndPoint.AddressFamily != AddressFamily.InterNetwork) {
 -                    throw new InvalidOperationException("no IPv4 address");
@@ -90,8 +143,7 @@ index ec688e99..5dac4177 100755
 +                endpoint.AddressFamily != AddressFamily.InterNetworkV6) {
 +                throw new InvalidOperationException($"Unsupported network address family {endpoint.AddressFamily}.");
 +            }
--
-+
+ 
 -                Socket socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
 -                try {
 -                    await socket.ConnectAsync(new DnsEndPoint(ctx.DnsEndPoint.Host, ctx.DnsEndPoint.Port, AddressFamily.InterNetwork), token).ConfigureAwait(false);
@@ -132,14 +184,13 @@ index ec688e99..5dac4177 100755
 +                throw new HttpRequestException($"Could not connect to {endpoint.Host} over IPv4 or IPv6.", lastError);
 +            throw new InvalidOperationException($"DNS returned no IPv4 or IPv6 address for {endpoint.Host}.");
 +        }
--
-+
+ 
+         public CompressedHttpClient() : base(handler, disposeHandler: false) {
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
-index b82f6efc..d9286eed 100644
+index b82f6efc..daa32d53 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
-@@ -32,11 +32,21 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-         public static Func<LegacyDetour, MethodBase, MethodBase> OnGenerateTrampoline;
+@@ -33,9 +33,19 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
  
          private Hook actualHook;
 -
@@ -162,9 +213,7 @@ index b82f6efc..d9286eed 100644
 +                }
                  MethodDetourInfo info = DetourManager.GetDetourInfo(Method);
                  using (info.WithLock())
-                     return info.FirstDetour == actualHook?.DetourInfo;
-@@ -46,6 +56,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-         // NOTE: This behaves slightly differently - legacy MonoMod kept non-applied detours in the chain as well
+@@ -47,4 +57,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          public int Index {
              get {
 +                if (_iosHook) {
@@ -174,9 +223,7 @@ index b82f6efc..d9286eed 100644
 +                }
                  if (actualHook?.IsApplied ?? false)
                      return -1;
- 
-@@ -57,6 +72,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
- 
+@@ -58,4 +73,8 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          public int MaxIndex {
              get {
 +                if (_iosHook) {
@@ -185,50 +232,46 @@ index b82f6efc..d9286eed 100644
 +                }
                  MethodDetourInfo info = DetourManager.GetDetourInfo(Method);
                  using (info.WithLock())
-                     return info.Detours.Count();
-@@ -73,6 +92,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-                 if (_Priority == value)
+@@ -74,4 +93,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                      return;
                  _Priority = value;
 +                if (_iosHook) _iosConfig.Priority = value;
                  _Refresh();
              }
-         }
-@@ -86,6 +106,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-                 if (_ID == value)
+@@ -87,4 +107,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                      return;
                  _ID = value;
 +                if (_iosHook) _iosConfig.ID = value;
                  _Refresh();
              }
-         }
-@@ -100,6 +121,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-                     if (value != null)
+@@ -101,4 +122,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                          foreach (string id in value)
                              _Before.Add(id);
 +                    if (_iosHook) _iosConfig.Before = _Before.ToArray();
                      _Refresh();
                  }
-             }
-@@ -116,6 +138,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-                     if (value != null)
+@@ -117,4 +139,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                          foreach (string id in value)
                              _After.Add(id);
 +                    if (_iosHook) _iosConfig.After = _After.ToArray();
                      _Refresh();
                  }
-             }
-@@ -136,7 +159,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -131,5 +154,6 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
  
+         public LegacyDetour(MethodBase from, MethodBase to, LegacyDetourConfig config) {
+-            from = from.GetIdentifiable();
++            if (!(AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddDetour") is Action<MethodBase, MethodInfo, object, object>))
++                from = from.GetIdentifiable();
+             if (from.Equals(to))
+                 throw new ArgumentException("Cannot LegacyDetour a method to itself!");
+@@ -137,5 +161,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
              Method = from;
              Target = to;
 -            TargetReal = PlatformTriple.Current.GetRealDetourTarget(from, to);
 +            TargetReal = to;
  
              _GlobalIndex = AcquireGlobalIndex();
-             _Priority = config.Priority;
-@@ -147,6 +170,18 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (config.After != null)
+@@ -148,4 +172,16 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  _After.AddRange(config.After);
  
 +            // On iOS the static hook gate is the only detour backend. Avoid
@@ -245,15 +288,7 @@ index b82f6efc..d9286eed 100644
 +
              // Generate a "chained trampoline" DynamicMethod.
              ParameterInfo[] args = Method.GetParameters();
-             Type[] argTypes;
-@@ -155,3 +178,4 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-         public LegacyDetour(MethodBase from, MethodBase to, LegacyDetourConfig config) {
--            from = from.GetIdentifiable();
-+            if (!(AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddDetour") is Action<MethodBase, MethodInfo, object, object>))
-+                from = from.GetIdentifiable();
-             if (from.Equals(to))
-@@ -204,6 +239,17 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (!IsValid)
+@@ -205,4 +241,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new ObjectDisposedException(nameof(LegacyDetour));
  
 +            if (_iosHook) {
@@ -269,9 +304,7 @@ index b82f6efc..d9286eed 100644
 +
              if (IsApplied || !(OnDetour?.InvokeWhileTrue(this, Method, Target) ?? true))
                  return;
- 
-@@ -215,6 +261,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (!IsValid)
+@@ -216,4 +263,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new ObjectDisposedException(nameof(LegacyDetour));
  
 +            if (_iosHook) {
@@ -285,9 +318,7 @@ index b82f6efc..d9286eed 100644
 +
              if (!IsApplied || !(OnUndo?.InvokeWhileTrue(this) ?? true))
                  return;
- 
-@@ -226,6 +281,12 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (!IsValid)
+@@ -227,4 +283,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  return;
  
 +            if (_iosHook) {
@@ -298,9 +329,7 @@ index b82f6efc..d9286eed 100644
 +
              Undo();
              IsValid = false;
-         }
-@@ -242,6 +303,16 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (!IsValid)
+@@ -243,4 +305,14 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  return;
  
 +            if (_iosHook) {
@@ -315,9 +344,7 @@ index b82f6efc..d9286eed 100644
 +
              actualHook?.Dispose();
              if (IsApplied) {
-                 actualHook = new Hook(Method, (MethodInfo) Target, LegacyDetourContext.CreateLegacyDetourConfig(ID, Priority, Before, After, GlobalIndex));
-@@ -260,6 +331,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (remoteTrampoline != null)
+@@ -261,4 +333,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  return remoteTrampoline;
  
 +            if (_iosHook)
@@ -325,9 +352,7 @@ index b82f6efc..d9286eed 100644
 +
              if (signature == null)
                  signature = Target;
- 
-@@ -294,6 +368,12 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (!typeof(Delegate).IsAssignableFrom(typeof(T)))
+@@ -295,4 +370,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new InvalidOperationException($"Type {typeof(T)} not a delegate type.");
  
 +            if (_iosHook) {
@@ -338,13 +363,11 @@ index b82f6efc..d9286eed 100644
 +
              return GenerateTrampoline(typeof(T).GetMethod("Invoke")).CreateDelegate(typeof(T)) as T;
          }
-     }
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
-index 5ab6d3d7..66ebdf53 100644
+index 5ab6d3d7..f7ed8911 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
-@@ -25,8 +25,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-         public static Func<LegacyHook, bool> OnUndo;
+@@ -26,6 +26,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          public static Func<LegacyHook, MethodBase, MethodBase> OnGenerateTrampoline;
  
 -        public bool IsValid => _Detour.IsValid;
@@ -358,15 +381,15 @@ index 5ab6d3d7..66ebdf53 100644
 +        public bool IsApplied => _iosHook ? _iosApplied : _Detour.IsApplied;
  
          public readonly MethodBase Method;
-         public readonly MethodBase Target;
-@@ -57,3 +62,4 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -51,5 +56,6 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
          public LegacyHook(MethodBase from, MethodInfo to, object target, ref LegacyHookConfig config) {
 -            from = from.GetIdentifiable();
 +            if (!(AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddReflectedOn") is Action<MethodBase, MethodInfo, object, object, object>))
 +                from = from.GetIdentifiable();
              Method = from;
-@@ -96,6 +102,17 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
- 
+             Target = to;
+@@ -97,4 +103,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
              MethodInfo origInvoke = _OrigDelegateInvoke = origType?.GetMethod("Invoke");
  
 +            // iOS uses woven managed gates rather than executable trampolines.
@@ -382,9 +405,7 @@ index 5ab6d3d7..66ebdf53 100644
 +
              DynamicMethodDefinition dmd;
              ILProcessor il;
- 
-@@ -208,6 +224,17 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (!IsValid)
+@@ -209,4 +226,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new ObjectDisposedException(nameof(LegacyHook));
  
 +            if (_iosHook) {
@@ -400,9 +421,7 @@ index 5ab6d3d7..66ebdf53 100644
 +
              if (!IsApplied && !(OnDetour?.InvokeWhileTrue(this, Method, Target, DelegateTarget) ?? true))
                  return;
- 
-@@ -218,6 +245,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (!IsValid)
+@@ -219,4 +247,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new ObjectDisposedException(nameof(LegacyHook));
  
 +            if (_iosHook) {
@@ -416,9 +435,7 @@ index 5ab6d3d7..66ebdf53 100644
 +
              if (IsApplied && !(OnUndo?.InvokeWhileTrue(this) ?? true))
                  return;
- 
-@@ -230,6 +266,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (!IsValid)
+@@ -231,4 +268,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  return;
  
 +            if (_iosHook) {
@@ -430,9 +447,7 @@ index 5ab6d3d7..66ebdf53 100644
 +
              _Detour.Free();
              _Free();
-         }
-@@ -252,6 +295,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (!typeof(Delegate).IsAssignableFrom(typeof(T)))
+@@ -253,4 +297,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new InvalidOperationException($"Type {typeof(T)} not a delegate type.");
  
 +            if (_iosHook) {
@@ -444,13 +459,11 @@ index 5ab6d3d7..66ebdf53 100644
 +
              return GenerateTrampoline(typeof(T).GetMethod("Invoke")).CreateDelegate(typeof(T)) as T;
          }
- 
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
 index 15b1c509..99c02240 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
-@@ -19,10 +19,78 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
- 
+@@ -20,8 +20,76 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          private static ConcurrentDictionary<(MethodBase, Delegate), Hook> Hooks = new ConcurrentDictionary<(MethodBase, Delegate), Hook>();
          private static ConcurrentDictionary<(MethodBase, Delegate), ILHook> ILHooks = new ConcurrentDictionary<(MethodBase, Delegate), ILHook>();
 +        private static ConcurrentDictionary<(MethodBase, Delegate), byte> IOSHooks = new ConcurrentDictionary<(MethodBase, Delegate), byte>();
@@ -528,9 +541,7 @@ index 15b1c509..99c02240 100644
 +                if (type.Namespace != null && type.Namespace.StartsWith("Celeste.Mod", StringComparison.Ordinal))
                      return true;
  
-             return false;
-@@ -45,6 +113,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
- 
+@@ -46,4 +114,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          public static void Add<T>(MethodBase method, Delegate hookDelegate) where T : Delegate => Add(method, hookDelegate);
          public static void Add(MethodBase method, Delegate hookDelegate) {
 +            if (TryAddIOSHook(method, hookDelegate))
@@ -538,9 +549,7 @@ index 15b1c509..99c02240 100644
 +
              if (IsEverestInternalMethod(method) && IsCoreModCaller(hookDelegate))
                  throw new InvalidOperationException("Core mods may not add hooks to Everest internal methods");
- 
-@@ -60,6 +131,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
- 
+@@ -61,4 +132,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          public static void Remove<T>(MethodBase method, Delegate hookDelegate) where T : Delegate => Remove(method, hookDelegate);
          public static void Remove(MethodBase method, Delegate hookDelegate) {
 +            if (TryRemoveIOSHook(method, hookDelegate))
@@ -548,9 +557,7 @@ index 15b1c509..99c02240 100644
 +
              if (IsEverestInternalMethod(method) && IsCoreModCaller(hookDelegate))
                  throw new InvalidOperationException("Core mods may not remove hooks from Everest internal methods");
- 
-@@ -69,6 +143,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
- 
+@@ -70,4 +144,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          public static void Modify<T>(MethodBase method, Delegate callback) where T : Delegate => Modify(method, callback);
          public static void Modify(MethodBase method, Delegate callback) {
 +            if (TryAddIOSILHook(method, callback))
@@ -558,9 +565,7 @@ index 15b1c509..99c02240 100644
 +
              if (IsEverestInternalMethod(method) && IsCoreModCaller(callback))
                  throw new InvalidOperationException("Core mods may not add hooks to Everest internal methods");
- 
-@@ -83,6 +160,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
- 
+@@ -84,4 +161,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          public static void Unmodify<T>(MethodBase method, Delegate callback) => Unmodify(method, callback);
          public static void Unmodify(MethodBase method, Delegate callback) {
 +            if (TryRemoveIOSILHook(method, callback))
@@ -568,9 +573,7 @@ index 15b1c509..99c02240 100644
 +
              if (IsEverestInternalMethod(method) && IsCoreModCaller(callback))
                  throw new InvalidOperationException("Core mods may not remove hooks from Everest internal methods");
- 
-@@ -91,6 +171,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-         }
+@@ -92,4 +172,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
  
          public static void Clear() {
 +            if (IOSHooks.Count > 0 || IOSILHooks.Count > 0) {
@@ -582,21 +585,23 @@ index 15b1c509..99c02240 100644
 +
              foreach (Hook hook in Hooks.Values)
                  hook.Dispose();
-             Hooks.Clear();
+@@ -101,3 +188,3 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         }
+     }
+-}
+\ No newline at end of file
++}
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs
 index 1e53c174..470e5a15 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs
-@@ -33,6 +33,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-         internal static uint AcquireGlobalIndex() => Interlocked.Increment(ref _GlobalIndexNext)-1;
+@@ -34,4 +34,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
  
          private ILHook actualHook;
 +        private bool IOSManagedBackend => AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddIL") is Action<MethodBase, Delegate, object>;
  
          public bool IsValid { get; private set; } = true;
-         public bool IsApplied { get; private set; }
-@@ -40,6 +41,12 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-         // NOTE: This behaves slightly differently - legacy MonoMod kept non-applied hooks in the chain as well
+@@ -41,4 +42,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          public int Index {
              get {
 +                if (IOSManagedBackend) {
@@ -607,9 +612,7 @@ index 1e53c174..470e5a15 100644
 +                }
                  if (actualHook?.IsApplied ?? false)
                      return -1;
- 
-@@ -51,6 +58,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
- 
+@@ -52,4 +59,8 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
          public int MaxIndex {
              get {
 +                if (IOSManagedBackend) {
@@ -618,9 +621,7 @@ index 1e53c174..470e5a15 100644
 +                }
                  MethodDetourInfo info = DetourManager.GetDetourInfo(Method);
                  using (info.WithLock())
-                     return info.ILHooks.Count();
-@@ -177,6 +188,16 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
-             if (!IsValid)
+@@ -178,4 +189,14 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  return;
  
 +            if (IOSManagedBackend) {
@@ -635,13 +636,11 @@ index 1e53c174..470e5a15 100644
 +
              actualHook?.Dispose();
              if (IsApplied) {
-                 actualHook = new ILHook(Method, Manipulator, LegacyDetourContext.CreateLegacyDetourConfig(ID, Priority, Before, After, GlobalIndex, true));
 diff --git a/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs b/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs
 index 2a508cfa..2b1e19d3 100644
 --- a/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs
 +++ b/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs
-@@ -506,11 +506,25 @@ namespace Celeste.Mod {
- 
+@@ -507,9 +507,23 @@ namespace Celeste.Mod {
                  Assembly asm;
                  string symPath = Path.ChangeExtension(path, "pdb");
 +                byte[] iosWovenImage = null;
@@ -666,13 +665,11 @@ index 2a508cfa..2b1e19d3 100644
 +                    iosRegister(asm, iosWovenImage);
  
                  // Insert into dictionaries
-                 string asmName = asm.GetName().Name;
 diff --git a/Celeste.Mod.mm/Patches/AscendManager.cs b/Celeste.Mod.mm/Patches/AscendManager.cs
 index ed37b81f..efd2739c 100644
 --- a/Celeste.Mod.mm/Patches/AscendManager.cs
 +++ b/Celeste.Mod.mm/Patches/AscendManager.cs
-@@ -43,9 +43,14 @@ namespace MonoMod {
-             MethodDefinition m_ShouldRestorePlayerX = method.DeclaringType.FindMethod("System.Boolean ShouldRestorePlayerX()");
+@@ -44,7 +44,12 @@ namespace MonoMod {
              MethodDefinition m_Entity_set_X = method.Module.GetType("Monocle.Entity").FindMethod("System.Void set_X(System.Single)").Resolve();
  
 -            FieldDefinition f_this = routine.DeclaringType.FindField("<>4__this");
@@ -688,9 +685,7 @@ index ed37b81f..efd2739c 100644
 +                throw new InvalidOperationException("Could not resolve AscendManager.Routine captured state fields by type.");
              FieldReference f_Vector2_X = MonoModRule.Modder.Module.ImportReference(t_Vector2.FindField("X"));
  
-             new ILContext(routine).Invoke(il => {
-@@ -78,5 +83,16 @@ namespace MonoMod {
-             });
+@@ -79,4 +84,15 @@ namespace MonoMod {
          }
  
 +        private static FieldDefinition FindSingleField(TypeDefinition stateMachine, TypeDefinition expectedType) {
@@ -710,7 +705,7 @@ diff --git a/Celeste.Mod.mm/Patches/EventTrigger.cs b/Celeste.Mod.mm/Patches/Eve
 index 63909b40..52a3d04e 100644
 --- a/Celeste.Mod.mm/Patches/EventTrigger.cs
 +++ b/Celeste.Mod.mm/Patches/EventTrigger.cs
-@@ -1,6 +1,7 @@
+@@ -1,5 +1,6 @@
 -﻿#pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
 +#pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
  
@@ -718,9 +713,7 @@ index 63909b40..52a3d04e 100644
 +using System.Linq;
  using Celeste.Mod;
  using Microsoft.Xna.Framework;
- using Monocle;
-@@ -79,98 +80,93 @@ namespace MonoMod {
-     static partial class MonoModRules {
+@@ -80,19 +81,9 @@ namespace MonoMod {
  
          public static void PatchEventTriggerOnEnter(MethodDefinition method, CustomAttribute attrib) {
 -            // We also need to do special work in the cctor.
@@ -740,7 +733,7 @@ index 63909b40..52a3d04e 100644
 -
              TypeDefinition td_LoadStrings = f_LoadStrings.FieldType.Resolve();
              MethodReference m_LoadStrings_Add = MonoModRule.Modder.Module.ImportReference(td_LoadStrings.FindMethod("Add"));
-             m_LoadStrings_Add.DeclaringType = f_LoadStrings.FieldType;
+@@ -100,76 +91,81 @@ namespace MonoMod {
              MethodReference m_LoadStrings_ctor = MonoModRule.Modder.Module.ImportReference(td_LoadStrings.FindMethod("System.Void .ctor()"));
              m_LoadStrings_ctor.DeclaringType = f_LoadStrings.FieldType;
 -            cctor_il.Emit(OpCodes.Newobj, m_LoadStrings_ctor);
@@ -883,13 +876,11 @@ index 63909b40..52a3d04e 100644
 +            cctorIL.Append(cctorIL.Create(OpCodes.Ret));
          }
  
-     }
 diff --git a/Celeste.Mod.mm/Patches/Level.cs b/Celeste.Mod.mm/Patches/Level.cs
 index 7c82d5f1..da1e78af 100644
 --- a/Celeste.Mod.mm/Patches/Level.cs
 +++ b/Celeste.Mod.mm/Patches/Level.cs
-@@ -959,8 +959,7 @@ namespace MonoMod {
-                 cursor.GotoNext(
+@@ -960,6 +960,5 @@ namespace MonoMod {
                      instr => instr.MatchLdfld("Celeste.EntityData", "Name"), // cursor.Next (get entity name)
                      instr => instr.MatchStloc(out nameLoc), // cursor.Next.Next (save entity name)
 -                    instr => instr.MatchLdloc(out _),
@@ -897,21 +888,17 @@ index 7c82d5f1..da1e78af 100644
 +                    instr => instr.MatchLdloc(out _)); // string-switch lowering varies by compiler; this prefix is stable
                  
                  // + _currentEntityData = entityData;
-                 // + _currentEntityId = entityId;
 diff --git a/Celeste.Mod.mm/Patches/Player.cs b/Celeste.Mod.mm/Patches/Player.cs
 index 88c74c26..6e371243 100644
 --- a/Celeste.Mod.mm/Patches/Player.cs
 +++ b/Celeste.Mod.mm/Patches/Player.cs
-@@ -9,6 +9,7 @@ using MonoMod;
- using System;
+@@ -10,4 +10,5 @@ using System;
  using System.Collections;
  using System.Collections.Generic;
 +using System.Linq;
  using System.Runtime.CompilerServices;
  using Mono.Cecil;
- using Mono.Cecil.Cil;
-@@ -628,7 +629,12 @@ namespace MonoMod {
-             });
+@@ -629,5 +630,10 @@ namespace MonoMod {
  
              // then hook another method given the context available.
 -            method = method.DeclaringType.FindMethod("<.ctor>b__280_1");
@@ -923,62 +910,9 @@ index 88c74c26..6e371243 100644
 +                throw new InvalidOperationException("Could not find the Player constructor footstep callback to patch.");
  
              new ILContext(method).Invoke(il => {
-                 ILCursor cursor = new ILCursor(il);
-
-diff --git a/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs b/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
-index af74430c..f22b45b6 100644
---- a/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
-+++ b/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
-@@ -966,23 +966,46 @@ namespace Celeste.Mod {
-                 if (depName == CoreModule.NETCoreMetaName)
-                     depName = CoreModule.Instance.Metadata.Name;
- 
-+                string normalizedDependencyName = NormalizeDependencyName(depName);
-+                EverestModule normalizedMatch = null;
-+                bool exactModuleFound = false;
-+                bool normalizedMatchAmbiguous = false;
-                 lock (_Modules) {
-                     foreach (EverestModule other in _Modules) {
-                         EverestModuleMetadata meta = other.Metadata;
--                        if (meta.Name != depName)
-+                        if (meta.Name == depName) {
-+                            exactModuleFound = true;
-+                            if (VersionSatisfiesDependency(depVersion, meta.Version)) {
-+                                module = other;
-+                                return true;
-+                            }
-                             continue;
--
--                        Version version = meta.Version;
--                        if (VersionSatisfiesDependency(depVersion, version)) {
--                            module = other;
--                            return true;
-                         }
-+                        if (normalizedDependencyName.Length == 0 ||
-+                            NormalizeDependencyName(meta.Name) != normalizedDependencyName ||
-+                            !VersionSatisfiesDependency(depVersion, meta.Version))
-+                            continue;
-+
-+                        if (normalizedMatch == null)
-+                            normalizedMatch = other;
-+                        else if (normalizedMatch.Metadata.Name != meta.Name)
-+                            normalizedMatchAmbiguous = true;
-                     }
-                 }
-+                if (!exactModuleFound && !normalizedMatchAmbiguous && normalizedMatch != null) {
-+                    module = normalizedMatch;
-+                    return true;
-+                }
-                 module = null;
-                 return false;
-             }
- 
-+            private static string NormalizeDependencyName(string name) {
-+                if (string.IsNullOrWhiteSpace(name))
-+                    return string.Empty;
-+                return new string(name.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
-+            }
-+
-             /// <summary>
-             /// Checks if the given version number is "compatible" with the one required as a dependency.
-             /// </summary>
+diff --git a/external/MonoMod b/external/MonoMod
+--- a/external/MonoMod
++++ b/external/MonoMod
+@@ -1 +1 @@
+-Subproject commit dfc30a1506d37fb88a2c2be004f525205f46a24c
++Subproject commit dfc30a1506d37fb88a2c2be004f525205f46a24c-dirty
