@@ -147,6 +147,8 @@ public static class RuntimeProbe
             detourIdentity, null);
         AssertEqual("Managed detour on loaded mod image", 110, add.Invoke(null, new object[] { 6, 4 }));
         Type trampolineType = fixture.GetType("ProbeAddOriginal", throwOnError: true);
+        MethodInfo trampolineSignature = trampolineType.GetMethod("Invoke", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new MissingMethodException(trampolineType.FullName, "Invoke");
         Func<MethodBase, object, Type, Delegate> createTrampoline = AppDomain.CurrentDomain.GetData(
             "Celeste.IOSHookRuntime.CreateDetourTrampoline") as Func<MethodBase, object, Type, Delegate>;
         if (createTrampoline == null)
@@ -165,6 +167,9 @@ public static class RuntimeProbe
         MethodInfo legacyTrampolineFactory = legacyDetourType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .SingleOrDefault(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition &&
                 method.GetGenericArguments().Length == 1 && method.GetParameters().Length == 0);
+        MethodInfo legacyMethodTrampolineFactory = legacyDetourType.GetMethod("GenerateTrampoline",
+            BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(MethodBase) }, null)
+            ?? throw new MissingMethodException(legacyDetourType.FullName, "GenerateTrampoline(MethodBase)");
         if (legacyTrampolineFactory == null)
             throw new MissingMethodException(legacyDetourType.FullName, "GenerateTrampoline<T>()");
         object legacyDetour = legacyConstructor.Invoke(new object[] {
@@ -176,6 +181,17 @@ public static class RuntimeProbe
                 .Invoke(legacyDetour, null);
             AssertEqual("Everest GenerateTrampoline<T> continuation", 10,
                 legacyTrampoline.DynamicInvoke(new object[] { 6, 4 }));
+
+            MethodInfo explicitMethodTrampoline = (MethodInfo)legacyMethodTrampolineFactory.Invoke(
+                legacyDetour, new object[] { trampolineSignature });
+            Delegate explicitMethodTrampolineDelegate = explicitMethodTrampoline.CreateDelegate(trampolineType);
+            AssertEqual("Everest GenerateTrampoline(MethodBase) continuation", 10,
+                explicitMethodTrampolineDelegate.DynamicInvoke(new object[] { 6, 4 }));
+
+            MethodInfo defaultMethodTrampoline = (MethodInfo)legacyMethodTrampolineFactory.Invoke(
+                legacyDetour, new object[] { null });
+            AssertEqual("Everest GenerateTrampoline() default signature", 10,
+                defaultMethodTrampoline.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
         }
         finally
         {
@@ -183,6 +199,46 @@ public static class RuntimeProbe
                 .Invoke(legacyDetour, null);
         }
         AssertEqual("Everest LegacyDetour removal", 10, add.Invoke(null, new object[] { 6, 4 }));
+
+        Mark("legacy trampoline tracks downstream hook removal on iOS interpreter");
+        object firstDetour = legacyConstructor.Invoke(new object[] {
+            add, targetType.GetMethod("DetourAddTwenty", BindingFlags.Public | BindingFlags.Static) });
+        Delegate nextDelegate = (Delegate)legacyTrampolineFactory.MakeGenericMethod(trampolineType)
+            .Invoke(firstDetour, null);
+        MethodInfo nextMethod = (MethodInfo)legacyMethodTrampolineFactory.Invoke(
+            firstDetour, new object[] { trampolineSignature });
+        object secondDetour = null;
+        try
+        {
+            AssertEqual("generic trampoline before downstream hook is added", 10,
+                nextDelegate.DynamicInvoke(new object[] { 6, 4 }));
+            AssertEqual("MethodBase trampoline before downstream hook is added", 10,
+                nextMethod.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
+
+            secondDetour = legacyConstructor.Invoke(new object[] {
+                add, targetType.GetMethod("DetourAddHundred", BindingFlags.Public | BindingFlags.Static) });
+            AssertEqual("legacy detour order with downstream hook", 30, add.Invoke(null, new object[] { 6, 4 }));
+            AssertEqual("generic trampoline includes downstream hook", 110,
+                nextDelegate.DynamicInvoke(new object[] { 6, 4 }));
+            AssertEqual("MethodBase trampoline includes downstream hook", 110,
+                nextMethod.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
+
+            legacyDetourType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+                .Invoke(secondDetour, null);
+            secondDetour = null;
+            AssertEqual("generic trampoline follows downstream removal", 10,
+                nextDelegate.DynamicInvoke(new object[] { 6, 4 }));
+            AssertEqual("MethodBase trampoline follows downstream removal", 10,
+                nextMethod.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
+        }
+        finally
+        {
+            if (secondDetour != null)
+                legacyDetourType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+                    .Invoke(secondDetour, null);
+            legacyDetourType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+                .Invoke(firstDetour, null);
+        }
 
         Mark("Everest public LegacyHook orig trampoline and Detour facade on iOS interpreter");
         MethodInfo legacyOnMethod = hooksType.GetMethod("Add", BindingFlags.Public | BindingFlags.Static)
@@ -206,6 +262,19 @@ public static class RuntimeProbe
             AssertEqual("Everest LegacyHook Detour trampoline", 10,
                 hookTrampoline.DynamicInvoke(new object[] { 6, 4 }));
 
+            MethodInfo legacyHookMethodTrampolineFactory = legacyHookType.GetMethod("GenerateTrampoline",
+                BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(MethodBase) }, null)
+                ?? throw new MissingMethodException(legacyHookType.FullName, "GenerateTrampoline(MethodBase)");
+            MethodInfo hookMethodTrampoline = (MethodInfo)legacyHookMethodTrampolineFactory.Invoke(
+                legacyHook, new object[] { trampolineSignature });
+            AssertEqual("Everest LegacyHook GenerateTrampoline(MethodBase)", 10,
+                hookMethodTrampoline.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
+
+            MethodInfo hookDefaultMethodTrampoline = (MethodInfo)legacyHookMethodTrampolineFactory.Invoke(
+                legacyHook, new object[] { null });
+            AssertEqual("Everest LegacyHook default MethodBase trampoline", 10,
+                hookDefaultMethodTrampoline.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
+
             hookDetour.GetType().GetMethod("Undo", BindingFlags.Public | BindingFlags.Instance)
                 .Invoke(hookDetour, null);
             if ((bool)legacyHookType.GetProperty("IsApplied").GetValue(legacyHook))
@@ -224,6 +293,47 @@ public static class RuntimeProbe
                 .Invoke(legacyHook, null);
         }
         AssertEqual("Everest LegacyHook removal", 10, add.Invoke(null, new object[] { 6, 4 }));
+
+        Mark("Everest LegacyHook trampolines follow downstream changes on iOS interpreter");
+        object firstLegacyHook = legacyHookConstructor.Invoke(new object[] {
+            add, hooksType.GetMethod("AddTwenty", BindingFlags.Public | BindingFlags.Static) });
+        object secondLegacyHook = null;
+        try
+        {
+            Delegate liveHookTrampoline = (Delegate)legacyTrampolineFactory.MakeGenericMethod(trampolineType)
+                .Invoke(firstLegacyHook, null);
+            MethodInfo liveHookMethodTrampoline = (MethodInfo)legacyHookMethodTrampolineFactory.Invoke(
+                firstLegacyHook, new object[] { trampolineSignature });
+            AssertEqual("LegacyHook trampoline before downstream hook", 10,
+                liveHookTrampoline.DynamicInvoke(new object[] { 6, 4 }));
+            AssertEqual("LegacyHook MethodBase trampoline before downstream hook", 10,
+                liveHookMethodTrampoline.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
+
+            secondLegacyHook = legacyHookConstructor.Invoke(new object[] {
+                add, hooksType.GetMethod("AddHundred", BindingFlags.Public | BindingFlags.Static) });
+            AssertEqual("LegacyHook live route with downstream hook", 130,
+                add.Invoke(null, new object[] { 6, 4 }));
+            AssertEqual("LegacyHook trampoline includes downstream hook", 110,
+                liveHookTrampoline.DynamicInvoke(new object[] { 6, 4 }));
+            AssertEqual("LegacyHook MethodBase trampoline includes downstream hook", 110,
+                liveHookMethodTrampoline.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
+
+            legacyHookType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+                .Invoke(secondLegacyHook, null);
+            secondLegacyHook = null;
+            AssertEqual("LegacyHook trampoline follows downstream removal", 10,
+                liveHookTrampoline.DynamicInvoke(new object[] { 6, 4 }));
+            AssertEqual("LegacyHook MethodBase trampoline follows downstream removal", 10,
+                liveHookMethodTrampoline.CreateDelegate(trampolineType).DynamicInvoke(new object[] { 6, 4 }));
+        }
+        finally
+        {
+            if (secondLegacyHook != null)
+                legacyHookType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+                    .Invoke(secondLegacyHook, null);
+            legacyHookType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+                .Invoke(firstLegacyHook, null);
+        }
 
         Mark("QuickieMountain2 instance detour trampoline signature on iOS interpreter");
         Type updateStatsTargetType = fixture.GetType("ProbeOuiUpdateStatsTarget", throwOnError: true);

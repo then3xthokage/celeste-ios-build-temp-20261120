@@ -824,6 +824,21 @@ internal static class Program
             object originalInstance = Activator.CreateInstance(targetType);
             AssertEqual("Everest GenerateTrampoline<T> original continuation", "7",
                 trampoline.DynamicInvoke(new[] { originalInstance, (object)2 }).ToString());
+
+            MethodInfo generateMethodBaseTrampoline = legacyDetourType.GetMethod("GenerateTrampoline",
+                BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(MethodBase) }, null)
+                ?? throw new MissingMethodException(legacyDetourType.FullName, "GenerateTrampoline(MethodBase)");
+            MethodInfo explicitTrampoline = (MethodInfo)generateMethodBaseTrampoline.Invoke(detour,
+                new object[] { originalDelegateType.GetMethod("Invoke") });
+            AssertEqual("Everest GenerateTrampoline(MethodBase) original continuation", "7",
+                explicitTrampoline.CreateDelegate(originalDelegateType)
+                    .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+
+            MethodInfo defaultTrampoline = (MethodInfo)generateMethodBaseTrampoline.Invoke(detour, new object[] { null });
+            AssertEqual("Everest GenerateTrampoline() default signature", "7",
+                defaultTrampoline.CreateDelegate(originalDelegateType)
+                    .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+
         }
         finally
         {
@@ -833,6 +848,54 @@ internal static class Program
         object afterRemoval = Activator.CreateInstance(targetType);
         AssertEqual("Everest public LegacyDetour removal", "7",
             targetMethod.Invoke(afterRemoval, new object[] { 2 }).ToString());
+
+        Type chainOriginalDelegateType = targetAssembly.GetType("LegacyDetourOriginal", true);
+        MethodInfo chainGenerateTrampoline = legacyDetourType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .SingleOrDefault(method => method.Name == "GenerateTrampoline" && method.IsGenericMethodDefinition &&
+                method.GetGenericArguments().Length == 1 && method.GetParameters().Length == 0);
+        object firstDetour = constructor.Invoke(new object[] { targetMethod,
+            targetType.GetMethod("DetourAddTwenty", BindingFlags.Public | BindingFlags.Static) });
+        object secondDetour = null;
+        try
+        {
+            Delegate nextDelegate = (Delegate)chainGenerateTrampoline.MakeGenericMethod(chainOriginalDelegateType)
+                .Invoke(firstDetour, null);
+            MethodInfo generateMethodBaseTrampoline = legacyDetourType.GetMethod("GenerateTrampoline",
+                BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(MethodBase) }, null)
+                ?? throw new MissingMethodException(legacyDetourType.FullName, "GenerateTrampoline(MethodBase)");
+            MethodInfo nextMethod = (MethodInfo)generateMethodBaseTrampoline.Invoke(firstDetour,
+                new object[] { chainOriginalDelegateType.GetMethod("Invoke") });
+
+            AssertEqual("Generic detour continuation before downstream hook is added", "7",
+                nextDelegate.DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+            AssertEqual("MethodBase detour continuation before downstream hook is added", "7",
+                nextMethod.CreateDelegate(chainOriginalDelegateType)
+                    .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+
+            secondDetour = constructor.Invoke(new object[] { targetMethod,
+                targetType.GetMethod("DetourAddHundred", BindingFlags.Public | BindingFlags.Static) });
+            AssertEqual("Legacy detour route after downstream hook is added", "27",
+                targetMethod.Invoke(Activator.CreateInstance(targetType), new object[] { 2 }).ToString());
+            AssertEqual("Generic detour continuation includes downstream hook", "107",
+                nextDelegate.DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+            AssertEqual("MethodBase detour continuation includes downstream hook", "107",
+                nextMethod.CreateDelegate(chainOriginalDelegateType)
+                    .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+
+            legacyDetourType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance).Invoke(secondDetour, null);
+            secondDetour = null;
+            AssertEqual("Generic detour continuation updates after removal", "7",
+                nextDelegate.DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+            AssertEqual("MethodBase detour continuation updates after removal", "7",
+                nextMethod.CreateDelegate(chainOriginalDelegateType)
+                    .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+        }
+        finally
+        {
+            legacyDetourType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance).Invoke(firstDetour, null);
+            if (secondDetour != null)
+                legacyDetourType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance).Invoke(secondDetour, null);
+        }
     }
 
     private static void VerifyLegacyHookManagedRoute(Assembly everestRuntime, Assembly targetAssembly)
@@ -871,6 +934,20 @@ internal static class Program
             AssertEqual("Everest LegacyHook public Detour trampoline", "7",
                 trampoline.DynamicInvoke(new[] { originalInstance, (object)2 }).ToString());
 
+            MethodInfo generateMethodBaseTrampoline = legacyHookType.GetMethod("GenerateTrampoline",
+                BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(MethodBase) }, null)
+                ?? throw new MissingMethodException(legacyHookType.FullName, "GenerateTrampoline(MethodBase)");
+            MethodInfo explicitTrampoline = (MethodInfo)generateMethodBaseTrampoline.Invoke(hook,
+                new object[] { originalDelegateType.GetMethod("Invoke") });
+            AssertEqual("Everest LegacyHook GenerateTrampoline(MethodBase)", "7",
+                explicitTrampoline.CreateDelegate(originalDelegateType)
+                    .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+
+            MethodInfo defaultTrampoline = (MethodInfo)generateMethodBaseTrampoline.Invoke(hook, new object[] { null });
+            AssertEqual("Everest LegacyHook default MethodBase trampoline", "7",
+                defaultTrampoline.CreateDelegate(originalDelegateType)
+                    .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+
             detour.GetType().GetMethod("Undo", BindingFlags.Public | BindingFlags.Instance).Invoke(detour, null);
             if ((bool)legacyHookType.GetProperty("IsApplied").GetValue(hook))
                 throw new InvalidOperationException("Undo through the LegacyHook.Detour facade left the managed hook applied.");
@@ -891,6 +968,56 @@ internal static class Program
         object afterDispose = Activator.CreateInstance(targetType);
         AssertEqual("Everest LegacyHook disposal", "7",
             targetMethod.Invoke(afterDispose, new object[] { 2 }).ToString());
+
+        object firstLegacyHook = constructor.Invoke(new object[] { targetMethod,
+            targetAssembly.GetType("LegacyHookTargetHooks", true)
+                .GetMethod("OnAddTwenty", BindingFlags.Public | BindingFlags.Static) });
+        object secondLegacyHook = null;
+        try
+        {
+            Type originalDelegateType = targetAssembly.GetType("LegacyDetourOriginal", true);
+            MethodInfo genericTrampolineFactory = legacyHookType.GetMethod("GenerateTrampoline",
+                BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null)
+                ?? throw new MissingMethodException(legacyHookType.FullName, "GenerateTrampoline<T>()");
+            Delegate liveGenericTrampoline = (Delegate)genericTrampolineFactory
+                .MakeGenericMethod(originalDelegateType).Invoke(firstLegacyHook, null);
+            MethodInfo methodTrampolineFactory = legacyHookType.GetMethod("GenerateTrampoline",
+                BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(MethodBase) }, null)
+                ?? throw new MissingMethodException(legacyHookType.FullName, "GenerateTrampoline(MethodBase)");
+            MethodInfo liveMethodTrampoline = (MethodInfo)methodTrampolineFactory.Invoke(firstLegacyHook,
+                new object[] { originalDelegateType.GetMethod("Invoke") });
+
+            AssertEqual("LegacyHook trampoline before downstream hook", "7",
+                liveGenericTrampoline.DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+            AssertEqual("LegacyHook MethodBase trampoline before downstream hook", "7",
+                liveMethodTrampoline.CreateDelegate(originalDelegateType)
+                    .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+
+            secondLegacyHook = constructor.Invoke(new object[] { targetMethod,
+                targetAssembly.GetType("LegacyHookTargetHooks", true)
+                    .GetMethod("OnAddHundred", BindingFlags.Public | BindingFlags.Static) });
+            AssertEqual("LegacyHook live route with downstream hook", "127",
+                targetMethod.Invoke(Activator.CreateInstance(targetType), new object[] { 2 }).ToString());
+            AssertEqual("LegacyHook trampoline includes downstream hook", "107",
+                liveGenericTrampoline.DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+            AssertEqual("LegacyHook MethodBase trampoline includes downstream hook", "107",
+                liveMethodTrampoline.CreateDelegate(originalDelegateType)
+                    .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+
+            legacyHookType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance).Invoke(secondLegacyHook, null);
+            secondLegacyHook = null;
+            AssertEqual("LegacyHook trampoline follows downstream removal", "7",
+                liveGenericTrampoline.DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+            AssertEqual("LegacyHook MethodBase trampoline follows downstream removal", "7",
+                liveMethodTrampoline.CreateDelegate(originalDelegateType)
+                    .DynamicInvoke(new[] { Activator.CreateInstance(targetType), (object)2 }).ToString());
+        }
+        finally
+        {
+            if (secondLegacyHook != null)
+                legacyHookType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance).Invoke(secondLegacyHook, null);
+            legacyHookType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance).Invoke(firstLegacyHook, null);
+        }
     }
 
     private static object AddReflected(MethodInfo target, MethodInfo hook)

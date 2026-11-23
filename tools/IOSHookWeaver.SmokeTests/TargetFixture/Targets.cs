@@ -122,6 +122,12 @@ public sealed class LegacyDetourTarget
         target.Value += amount * 10;
         return target.Value;
     }
+
+    public static int DetourAddTwenty(LegacyDetourTarget target, int amount) =>
+        target.Value + amount + 20;
+
+    public static int DetourAddHundred(LegacyDetourTarget target, int amount) =>
+        target.Value + amount + 100;
 }
 
 public delegate int LegacyDetourOriginal(LegacyDetourTarget target, int amount);
@@ -134,6 +140,12 @@ public static class LegacyHookTargetHooks
     {
         return orig(target, amount) + 100;
     }
+
+    public static int OnAddTwenty(LegacyHookOriginal orig, LegacyDetourTarget target, int amount) =>
+        orig(target, amount) + 20;
+
+    public static int OnAddHundred(LegacyHookOriginal orig, LegacyDetourTarget target, int amount) =>
+        orig(target, amount) + 100;
 }
 
 public struct TestStructTarget

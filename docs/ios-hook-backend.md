@@ -73,6 +73,11 @@ registration and removal during play, generic methods, value-type instances,
 and `ref` / `out` copyback. Reflected legacy hooks and managed detours use the
 same registry.
 
+Everest's public `GenerateTrampoline<T>()` and `GenerateTrampoline(MethodBase)`
+entry points both use typed managed wrappers on iOS. A returned trampoline keeps
+its exact signature while its continuation is refreshed as downstream hooks and
+detours are added, removed, or reordered.
+
 ### `IL.*` and `ILHook`
 
 The runtime retains the woven source image for each mod assembly. When a mod

@@ -41,6 +41,20 @@ namespace celestemeow
         }
     }
 
+    public sealed class IOSTypedDetourTrampolineState
+    {
+        public MethodBase Target;
+        public object Identity;
+        public Type DelegateType;
+        private Delegate continuation;
+
+        public Delegate Continuation
+        {
+            get => Volatile.Read(ref continuation);
+            set => Volatile.Write(ref continuation, value);
+        }
+    }
+
     public static class IOSTypedHookBridge
     {
         public static Delegate GetNext(IOSTypedContinuationState state)
@@ -53,6 +67,12 @@ namespace celestemeow
         {
             if (state == null) throw new ArgumentNullException(nameof(state));
             return state.GetBoundDelegate(target);
+        }
+
+        public static Delegate GetDetourContinuation(IOSTypedDetourTrampolineState state)
+        {
+            if (state == null) throw new ArgumentNullException(nameof(state));
+            return state.Continuation ?? throw new InvalidOperationException("The managed detour continuation is not initialized.");
         }
     }
 
@@ -77,11 +97,13 @@ namespace celestemeow
         internal const string DetourIndexDataKey = "Celeste.IOSHookRuntime.DetourIndex";
         internal const string DetourCountDataKey = "Celeste.IOSHookRuntime.DetourCount";
         internal const string CreateDetourTrampolineDataKey = "Celeste.IOSHookRuntime.CreateDetourTrampoline";
+        internal const string CreateDetourTrampolineMethodDataKey = "Celeste.IOSHookRuntime.CreateDetourTrampolineMethod";
         internal const string ILHookCountDataKey = "Celeste.IOSHookRuntime.ILHookCount";
         internal const string ClearDataKey = "Celeste.IOSHookRuntime.Clear";
 
         private static readonly object Sync = new object();
         private static readonly Dictionary<MethodBase, Registration[]> OnHooks = new Dictionary<MethodBase, Registration[]>();
+        private static readonly Dictionary<MethodBase, List<IOSTypedDetourTrampolineState>> DetourTrampolineStates = new Dictionary<MethodBase, List<IOSTypedDetourTrampolineState>>();
         private static readonly Dictionary<MethodBase, MethodInfo> ModifiedBodies = new Dictionary<MethodBase, MethodInfo>();
         private static readonly ConcurrentDictionary<MethodBase, MethodInfo> OriginalMethods = new ConcurrentDictionary<MethodBase, MethodInfo>();
         private static readonly Dictionary<MethodBase, Dictionary<Type, Delegate>> TypedDispatchCache = new Dictionary<MethodBase, Dictionary<Type, Delegate>>();
@@ -330,6 +352,7 @@ namespace celestemeow
             AppDomain.CurrentDomain.SetData(DetourIndexDataKey, (Func<MethodBase, object, int>)GetDetourIndex);
             AppDomain.CurrentDomain.SetData(DetourCountDataKey, (Func<MethodBase, int>)GetDetourCount);
             AppDomain.CurrentDomain.SetData(CreateDetourTrampolineDataKey, (Func<MethodBase, object, Type, Delegate>)CreateDetourTrampoline);
+            AppDomain.CurrentDomain.SetData(CreateDetourTrampolineMethodDataKey, (Func<MethodBase, object, MethodBase, MethodBase>)CreateDetourTrampolineMethod);
             AppDomain.CurrentDomain.SetData(ILHookCountDataKey, (Func<MethodBase, int>)IOSILHookRuntime.GetHookCount);
             AppDomain.CurrentDomain.SetData(ClearDataKey, (Action)Clear);
             IOSILHookRuntime.Initialize();
@@ -377,6 +400,7 @@ namespace celestemeow
                 OnHooks[target] = OrderByConfiguration(next);
                 TypedDispatchCache.Remove(target);
                 SetGateEnabled(target, true);
+                RefreshDetourTrampolinesLocked(target);
             }
         }
 
@@ -392,6 +416,7 @@ namespace celestemeow
                 else OnHooks[target] = next;
                 TypedDispatchCache.Remove(target);
                 SetGateEnabled(target, HasGateSource(target));
+                RefreshDetourTrampolinesLocked(target);
             }
         }
 
@@ -414,6 +439,7 @@ namespace celestemeow
                 OnHooks[target] = OrderByConfiguration(next);
                 InvalidateTypedDispatchForTarget(target);
                 SetGateEnabled(target, true);
+                RefreshDetourTrampolinesLocked(target);
             }
         }
 
@@ -429,6 +455,7 @@ namespace celestemeow
                 else OnHooks[target] = next;
                 InvalidateTypedDispatchForTarget(target);
                 SetGateEnabled(target, HasGateSource(target));
+                RefreshDetourTrampolinesLocked(target);
             }
         }
 
@@ -451,6 +478,7 @@ namespace celestemeow
                 OnHooks[target] = OrderByConfiguration(chain.Concat(new[] { registration }).ToArray());
                 InvalidateTypedDispatchForTarget(target);
                 SetGateEnabled(target, true);
+                RefreshDetourTrampolinesLocked(target);
             }
         }
 
@@ -483,28 +511,183 @@ namespace celestemeow
             if (target == null) throw new ArgumentNullException(nameof(target));
             if (identity == null) throw new ArgumentNullException(nameof(identity));
             if (delegateType == null) throw new ArgumentNullException(nameof(delegateType));
-            Registration[] chain;
-            int index;
+
+            return CreateDetourTrampolineWrapper(target, identity, delegateType).CreateDelegate(delegateType);
+        }
+
+        private static MethodInfo CreateDetourTrampolineWrapper(MethodBase target, object identity, Type delegateType)
+        {
+            if (target == null) throw new ArgumentNullException(nameof(target));
+            if (identity == null) throw new ArgumentNullException(nameof(identity));
+            if (delegateType == null) throw new ArgumentNullException(nameof(delegateType));
+
+            string typedDelegateName = "CelesteIOS.Generated.__ios_typed_delegate_" + IOSHookIdentity.ForMethod(target);
+            Type wovenTypedDelegate = target.Module.Assembly.GetType(typedDelegateName, false, false);
+            if (wovenTypedDelegate != null && !HaveSameTypedSignature(GetTypedDelegateType(target), delegateType))
+                throw new InvalidOperationException("The typed detour trampoline delegate does not match " + target + ".");
+
+            MethodInfo delegateInvoke = delegateType.GetMethod("Invoke")
+                ?? throw new MissingMethodException(delegateType.FullName, "Invoke");
+            IOSTypedDetourTrampolineState state = new IOSTypedDetourTrampolineState
+            {
+                Target = target,
+                Identity = identity,
+                DelegateType = delegateType
+            };
+            lock (Sync)
+                state.Continuation = CreateDetourTrampolineSnapshot(target, identity, delegateType);
+
+            string unique = Interlocked.Increment(ref nextSequence).ToString();
+            string assemblyName = "CelesteIOS.LegacyTrampoline." + unique;
+            AssemblyDefinition assembly = AssemblyDefinition.CreateAssembly(
+                new AssemblyNameDefinition(assemblyName, new Version(1, 0, 0, 0)), assemblyName, ModuleKind.Dll);
+            ModuleDefinition module = assembly.MainModule;
+            TypeDefinition helper = new TypeDefinition(
+                "CelesteIOS.Generated",
+                "LegacyTrampoline_" + unique,
+                Mono.Cecil.TypeAttributes.Public | Mono.Cecil.TypeAttributes.Abstract |
+                Mono.Cecil.TypeAttributes.Sealed | Mono.Cecil.TypeAttributes.BeforeFieldInit,
+                module.ImportReference(typeof(object)));
+            module.Types.Add(helper);
+
+            FieldDefinition stateField = new FieldDefinition(
+                "State",
+                Mono.Cecil.FieldAttributes.Public | Mono.Cecil.FieldAttributes.Static,
+                module.ImportReference(typeof(IOSTypedDetourTrampolineState)));
+            helper.Fields.Add(stateField);
+
+            Mono.Cecil.MethodDefinition wrapper = new Mono.Cecil.MethodDefinition(
+                "Invoke",
+                Mono.Cecil.MethodAttributes.Public | Mono.Cecil.MethodAttributes.Static |
+                Mono.Cecil.MethodAttributes.HideBySig,
+                ImportRuntimeParameterSignature(module, delegateInvoke.ReturnParameter));
+            foreach (ParameterInfo parameter in delegateInvoke.GetParameters())
+                wrapper.Parameters.Add(new ParameterDefinition(parameter.Name,
+                    (Mono.Cecil.ParameterAttributes)parameter.Attributes,
+                    ImportRuntimeParameterSignature(module, parameter)));
+            helper.Methods.Add(wrapper);
+
+            ILProcessor il = wrapper.Body.GetILProcessor();
+            il.Append(il.Create(OpCodes.Ldsfld, stateField));
+            MethodInfo getContinuation = typeof(IOSTypedHookBridge).GetMethod(
+                nameof(IOSTypedHookBridge.GetDetourContinuation), BindingFlags.Public | BindingFlags.Static);
+            il.Append(il.Create(OpCodes.Call, module.ImportReference(getContinuation)));
+            il.Append(il.Create(OpCodes.Castclass, module.ImportReference(delegateType)));
+            ParameterInfo[] parameters = delegateInvoke.GetParameters();
+            for (int index = 0; index < parameters.Length; index++)
+                il.Append(LoadCecilArgument(il, index));
+            il.Append(il.Create(OpCodes.Callvirt,
+                CreateRuntimeInstanceMethodReference(module, delegateType, delegateInvoke)));
+            il.Append(il.Create(OpCodes.Ret));
+
+            AssemblyLoadContext loadContext = AssemblyLoadContext.GetLoadContext(target.Module.Assembly) ?? AssemblyLoadContext.Default;
+            Assembly loaded = LoadGeneratedAssembly(assembly, loadContext,
+                target.Module.Assembly, delegateType.Assembly, typeof(IOSTypedDetourTrampolineState).Assembly);
+            Type loadedHelper = loaded.GetType(helper.FullName, true, false);
+            loadedHelper.GetField(stateField.Name, BindingFlags.Public | BindingFlags.Static).SetValue(null, state);
             lock (Sync)
             {
-                chain = GetRegistrationsForTargetLocked(target);
-                index = Array.FindIndex(chain, item => ReferenceEquals(item.Identity, identity));
+                if (!DetourTrampolineStates.TryGetValue(target, out List<IOSTypedDetourTrampolineState> states))
+                    DetourTrampolineStates[target] = states = new List<IOSTypedDetourTrampolineState>();
+                states.Add(state);
+                state.Continuation = CreateDetourTrampolineSnapshot(target, identity, delegateType);
             }
+            return loadedHelper.GetMethod(wrapper.Name, BindingFlags.Public | BindingFlags.Static);
+        }
+
+        private static Delegate CreateDetourTrampolineSnapshot(MethodBase target, object identity, Type delegateType)
+        {
+            Registration[] chain;
+            int index;
+            chain = GetRegistrationsForTargetLocked(target);
+            index = Array.FindIndex(chain, item => ReferenceEquals(item.Identity, identity));
             string typedDelegateName = "CelesteIOS.Generated.__ios_typed_delegate_" + IOSHookIdentity.ForMethod(target);
             Type wovenTypedDelegate = target.Module.Assembly.GetType(typedDelegateName, false, false);
             if (wovenTypedDelegate != null)
             {
                 Type expectedDelegate = GetTypedDelegateType(target);
-                if (!HaveSameTypedSignature(expectedDelegate, delegateType))
-                    throw new InvalidOperationException("The typed detour trampoline delegate does not match " + target + ".");
-                lock (Sync) chain = GetRegistrationsForTargetLocked(target);
-                index = Array.FindIndex(chain, item => ReferenceEquals(item.Identity, identity));
                 Delegate continuation = CreateTypedPipelineContinuation(target, expectedDelegate, chain, Math.Max(index + 1, 0));
                 return AdaptTypedDelegate(continuation, delegateType);
             }
             if (index < 0) index = -1;
             MethodInfo original = OriginalMethods.GetOrAdd(target, FindOriginalMethod);
             return new Invocation(target, original, chain, null).CreateContinuation(delegateType, index + 1);
+        }
+
+        public static MethodBase CreateDetourTrampolineMethod(MethodBase target, object identity, MethodBase signature)
+        {
+            if (target == null) throw new ArgumentNullException(nameof(target));
+            if (identity == null) throw new ArgumentNullException(nameof(identity));
+
+            string typedDelegateName = "CelesteIOS.Generated.__ios_typed_delegate_" + IOSHookIdentity.ForMethod(target);
+            Type wovenDelegateType = target.Module.Assembly.GetType(typedDelegateName, false, false);
+            Type delegateType;
+            if (wovenDelegateType != null)
+            {
+                delegateType = GetTypedDelegateType(target);
+            }
+            else
+            {
+                MethodBase fallbackSignature = signature ?? GetLegacyTrampolineDefaultSignature(identity, target);
+                if (!(fallbackSignature is MethodInfo fallbackMethod))
+                    throw new NotSupportedException("A legacy iOS trampoline needs a method-shaped signature for " + target + ".");
+                delegateType = CreateDelegateTypeForMethod(fallbackMethod);
+            }
+            MethodInfo delegateInvoke = delegateType.GetMethod("Invoke")
+                ?? throw new MissingMethodException(delegateType.FullName, "Invoke");
+            if (signature != null)
+                ValidateDetourTrampolineSignature(target, signature, delegateInvoke);
+
+            return CreateDetourTrampolineWrapper(target, identity, delegateType);
+        }
+
+        private static MethodBase GetLegacyTrampolineDefaultSignature(object identity, MethodBase target)
+        {
+            MethodInfo callback = identity?.GetType().GetField("Target", BindingFlags.Public | BindingFlags.Instance)
+                ?.GetValue(identity) as MethodInfo;
+            if (callback == null) return target;
+
+            string typeName = identity.GetType().FullName ?? string.Empty;
+            if (typeName.StartsWith("Celeste.Mod.Helpers.LegacyMonoMod.LegacyHook", StringComparison.Ordinal))
+            {
+                ParameterInfo[] parameters = callback.GetParameters();
+                if (parameters.Length > 0 && typeof(Delegate).IsAssignableFrom(parameters[0].ParameterType))
+                    return parameters[0].ParameterType.GetMethod("Invoke");
+            }
+            return callback;
+        }
+
+        private static void ValidateDetourTrampolineSignature(MethodBase target, MethodBase signature, MethodInfo delegateInvoke)
+        {
+            Type requestedReturn = signature is MethodInfo method ? method.ReturnType : typeof(void);
+            if (requestedReturn != delegateInvoke.ReturnType)
+                throw new InvalidOperationException("The requested iOS legacy trampoline return type does not match " + target + ".");
+            if (signature is MethodInfo requestedMethod &&
+                !SameCustomModifiers(delegateInvoke.ReturnParameter, requestedMethod.ReturnParameter))
+                throw new InvalidOperationException("The requested iOS legacy trampoline return modifiers do not match " + target + ".");
+
+            ParameterInfo[] requestedParameters = signature.GetParameters();
+            ParameterInfo[] expectedParameters = delegateInvoke.GetParameters();
+            if (requestedParameters.Length != expectedParameters.Length)
+                throw new InvalidOperationException("The requested iOS legacy trampoline parameter count does not match " + target + ".");
+            for (int index = 0; index < requestedParameters.Length; index++)
+                if (requestedParameters[index].ParameterType != expectedParameters[index].ParameterType ||
+                    !SameCustomModifiers(requestedParameters[index], expectedParameters[index]))
+                    throw new InvalidOperationException("The requested iOS legacy trampoline parameter " + index + " does not match " + target + ".");
+        }
+
+        private static void RefreshDetourTrampolinesLocked(MethodBase target)
+        {
+            if (!DetourTrampolineStates.TryGetValue(target, out List<IOSTypedDetourTrampolineState> states))
+                return;
+            foreach (IOSTypedDetourTrampolineState state in states)
+                state.Continuation = CreateDetourTrampolineSnapshot(state.Target, state.Identity, state.DelegateType);
+        }
+
+        private static void RefreshAllDetourTrampolinesLocked()
+        {
+            foreach (MethodBase target in DetourTrampolineStates.Keys.ToArray())
+                RefreshDetourTrampolinesLocked(target);
         }
 
         public static void Clear()
@@ -516,6 +699,7 @@ namespace celestemeow
                 TypedDispatchCache.Clear();
                 foreach (MethodBase target in targets)
                     SetGateEnabled(target, HasGateSource(target));
+                RefreshAllDetourTrampolinesLocked();
             }
             IOSILHookRuntime.Clear();
         }
@@ -540,6 +724,17 @@ namespace celestemeow
                             TypedDispatchCache.Remove(cachedTarget);
                     }
                     catch { }
+                }
+                foreach (MethodBase trampolineTarget in DetourTrampolineStates.Keys.ToArray())
+                {
+                    bool matches = trampolineTarget.Equals(target);
+                    try
+                    {
+                        matches |= IOSHookIdentity.GetMethodDefinitionPreservingDeclaringType(trampolineTarget).Equals(target) ||
+                            IOSHookIdentity.GetDefinition(trampolineTarget).Equals(target);
+                    }
+                    catch { }
+                    if (matches) RefreshDetourTrampolinesLocked(trampolineTarget);
                 }
                 SetGateEnabled(target, HasGateSource(target));
             }

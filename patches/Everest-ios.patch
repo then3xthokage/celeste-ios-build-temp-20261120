@@ -187,7 +187,7 @@ index ec688e99..5dac4177 100755
  
          public CompressedHttpClient() : base(handler, disposeHandler: false) {
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
-index b82f6efc..d52d443b 100644
+index b82f6efc..69717b6f 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
 @@ -33,9 +33,20 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
@@ -388,15 +388,19 @@ index b82f6efc..d52d443b 100644
 +
              actualHook?.Dispose();
              if (IsApplied) {
-@@ -261,4 +372,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -261,4 +372,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  return remoteTrampoline;
  
-+            if (_iosHook)
-+                throw new NotSupportedException("GenerateTrampoline(MethodBase) cannot return an interpreted iOS trampoline; use GenerateTrampoline<T>() instead.");
++            if (_iosHook) {
++                Func<MethodBase, object, MethodBase, MethodBase> create = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.CreateDetourTrampolineMethod") as Func<MethodBase, object, MethodBase, MethodBase>;
++                if (create == null)
++                    throw new InvalidOperationException("The iOS detour MethodBase trampoline backend is not available.");
++                return create(Method, _iosHookOwner ?? (object) this, signature);
++            }
 +
              if (signature == null)
                  signature = Target;
-@@ -295,4 +409,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -295,4 +413,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
                  throw new InvalidOperationException($"Type {typeof(T)} not a delegate type.");
  
 +            if (_iosHook) {
@@ -991,9 +995,3 @@ index 88c74c26..6e371243 100644
 +                throw new InvalidOperationException("Could not find the Player constructor footstep callback to patch.");
  
              new ILContext(method).Invoke(il => {
-diff --git a/external/MonoMod b/external/MonoMod
---- a/external/MonoMod
-+++ b/external/MonoMod
-@@ -1 +1 @@
--Subproject commit dfc30a1506d37fb88a2c2be004f525205f46a24c
-+Subproject commit dfc30a1506d37fb88a2c2be004f525205f46a24c-dirty

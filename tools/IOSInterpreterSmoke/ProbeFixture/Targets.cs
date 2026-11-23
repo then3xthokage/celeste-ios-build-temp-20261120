@@ -41,6 +41,8 @@ public static class ProbeTarget
 {
     public static int Add(int left, int right) => left + right;
     public static int DetourAdd(int left, int right) => left + right + 100;
+    public static int DetourAddTwenty(int left, int right) => left + right + 20;
+    public static int DetourAddHundred(int left, int right) => left + right + 100;
     public static int Constant() => 5;
 }
 
@@ -186,6 +188,8 @@ public static class ProbeHooks
     public static int RefLikeConstructorCalls;
 
     public static int Add(ProbeAddOriginal original, int left, int right) => original(left, right) + 5;
+    public static int AddTwenty(ProbeAddOriginal original, int left, int right) => original(left, right) + 20;
+    public static int AddHundred(ProbeAddOriginal original, int left, int right) => original(left, right) + 100;
 
     public static void OnRefLikeConstructor(ProbeRefLikeConstructorOriginal original,
         ref ProbeRefLikeConstructorTarget target, int value, out bool initialized)
