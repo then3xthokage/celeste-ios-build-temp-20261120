@@ -94,6 +94,41 @@ public static class RuntimeProbe
             probeHooksType.GetField("RefLikeConstructorCalls").GetValue(null));
         IOSHookRuntime.RemoveOn(refLikeConstructor, refLikeHook);
 
+        Mark("Everest public constructor Hook on iOS interpreter");
+        Type legacyHookType = typeof(Celeste.Mod.Helpers.LegacyMonoMod.LegacyHook);
+        Type everestConstructorTargetType = fixture.GetType("ProbeEverestStyleConstructorTarget", throwOnError: true);
+        ConstructorInfo everestConstructor = everestConstructorTargetType.GetConstructor(new[] { typeof(bool), typeof(int) })
+            ?? throw new MissingMethodException(everestConstructorTargetType.FullName, ".ctor(Boolean, Int32)");
+        Type everestConstructorHooksType = fixture.GetType("ProbeEverestStyleConstructorHooks", throwOnError: true);
+        ConstructorInfo legacyHookConstructor = legacyHookType.GetConstructor(new[] { typeof(MethodBase), typeof(MethodInfo) })
+            ?? throw new MissingMethodException(legacyHookType.FullName, ".ctor(MethodBase, MethodInfo)");
+        MethodInfo onConstructor = everestConstructorHooksType.GetMethod("OnConstructor", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new MissingMethodException(everestConstructorHooksType.FullName, "OnConstructor");
+        object legacyConstructorHook = legacyHookConstructor.Invoke(new object[] { everestConstructor, onConstructor });
+        try
+        {
+            object everestConstructorTarget = Activator.CreateInstance(everestConstructorTargetType,
+                new object[] { true, 37 });
+            AssertEqual("Everest LegacyHook constructor body", 37,
+                everestConstructorTargetType.GetField("Value").GetValue(everestConstructorTarget));
+            AssertEqual("Everest LegacyHook constructor post-body", 1,
+                everestConstructorTargetType.GetField("PostValue").GetValue(everestConstructorTarget));
+            AssertEqual("Everest LegacyHook constructor callback count", 1,
+                everestConstructorHooksType.GetField("Calls").GetValue(null));
+        }
+        finally
+        {
+            MethodInfo dispose = legacyHookType.GetMethod("Dispose", BindingFlags.Public | BindingFlags.Instance)
+                ?? throw new MissingMethodException(legacyHookType.FullName, "Dispose");
+            dispose.Invoke(legacyConstructorHook, null);
+        }
+        object unhookedConstructorTarget = Activator.CreateInstance(everestConstructorTargetType,
+            new object[] { true, 41 });
+        AssertEqual("Everest LegacyHook constructor removal", 41,
+            everestConstructorTargetType.GetField("Value").GetValue(unhookedConstructorTarget));
+        AssertEqual("Everest LegacyHook constructor removal leaves post-body untouched", 0,
+            everestConstructorTargetType.GetField("PostValue").GetValue(unhookedConstructorTarget));
+
         Mark("ordinary On hook and removal");
         Type targetType = fixture.GetType("ProbeTarget", throwOnError: true);
         MethodInfo add = targetType.GetMethod("Add", BindingFlags.Public | BindingFlags.Static);
