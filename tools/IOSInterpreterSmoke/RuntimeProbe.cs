@@ -45,12 +45,7 @@ public static class RuntimeProbe
         Assembly fixture = Assembly.Load(woven);
         IOSILHookRuntime.RegisterAssemblySnapshot(fixture, woven);
 
-        Mark("woven managed function pointer probe");
-        Type calliType = fixture.GetType("ProbeManagedCalli", throwOnError: true);
-        AssertEqual("Woven managed calli on iOS interpreter", 42,
-            calliType.GetMethod("Invoke").Invoke(null, new object[] { 25 }));
-
-        Mark("register module initializer hook");
+        Mark("register module initializer hook before first fixture call");
         int moduleInitializerToken;
         using (Mono.Cecil.AssemblyDefinition definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(new MemoryStream(woven)))
         {
@@ -64,8 +59,6 @@ public static class RuntimeProbe
         Delegate moduleHook = CreateExternalModuleInitializerHook(fixture);
         IOSHookRuntime.AddOn(moduleInitializer, moduleHook);
 
-        Mark("NLua generated callback and proxy probes");
-        VerifyNLuaCodeGeneration(fixture);
         Mark("execute hooked module initializer");
         RuntimeHelpers.RunModuleConstructor(fixture.ManifestModule.ModuleHandle);
         Type moduleState = fixture.GetType("ProbeModuleInitializer", throwOnError: true);
@@ -73,6 +66,14 @@ public static class RuntimeProbe
             throw new InvalidOperationException("The downloaded assembly's module initializer did not run before hook dispatch.");
         AssertEqual("Global module initializer On hook on iOS interpreter", 1,
             moduleInitializerHookCalls);
+
+        Mark("woven managed function pointer probe");
+        Type calliType = fixture.GetType("ProbeManagedCalli", throwOnError: true);
+        AssertEqual("Woven managed calli on iOS interpreter", 42,
+            calliType.GetMethod("Invoke").Invoke(null, new object[] { 25 }));
+
+        Mark("NLua generated callback and proxy probes");
+        VerifyNLuaCodeGeneration(fixture);
 
         Mark("Everest-style constructor chain");
         VerifyEverestStyleConstructor(fixture);
