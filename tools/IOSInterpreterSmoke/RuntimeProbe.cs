@@ -243,6 +243,9 @@ public static class RuntimeProbe
         Mark("Everest public LegacyHook orig trampoline and Detour facade on iOS interpreter");
         MethodInfo legacyOnMethod = hooksType.GetMethod("Add", BindingFlags.Public | BindingFlags.Static)
             ?? throw new MissingMethodException(hooksType.FullName, "Add");
+        MethodInfo legacyHookMethodTrampolineFactory = legacyHookType.GetMethod("GenerateTrampoline",
+            BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(MethodBase) }, null)
+            ?? throw new MissingMethodException(legacyHookType.FullName, "GenerateTrampoline(MethodBase)");
         object legacyHook = legacyHookConstructor.Invoke(new object[] { add, legacyOnMethod });
         try
         {
@@ -262,9 +265,6 @@ public static class RuntimeProbe
             AssertEqual("Everest LegacyHook Detour trampoline", 10,
                 hookTrampoline.DynamicInvoke(new object[] { 6, 4 }));
 
-            MethodInfo legacyHookMethodTrampolineFactory = legacyHookType.GetMethod("GenerateTrampoline",
-                BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(MethodBase) }, null)
-                ?? throw new MissingMethodException(legacyHookType.FullName, "GenerateTrampoline(MethodBase)");
             MethodInfo hookMethodTrampoline = (MethodInfo)legacyHookMethodTrampolineFactory.Invoke(
                 legacyHook, new object[] { trampolineSignature });
             AssertEqual("Everest LegacyHook GenerateTrampoline(MethodBase)", 10,
