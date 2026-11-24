@@ -240,10 +240,33 @@ jobs:
           fi
           dotnet_path="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$(command -v dotnet)")"
           dotnet_root="$(dirname "$dotnet_path")"
+          host_arch="$(uname -m)"
+          case "$host_arch" in
+            arm64)
+              dotnet_runtime_arch=arm64
+              simulator_rid=iossimulator-arm64
+              dotnet_root_arm64="$dotnet_root"
+              ;;
+            x86_64)
+              dotnet_runtime_arch=x64
+              simulator_rid=iossimulator-x64
+              dotnet_root_arm64=""
+              ;;
+            *)
+              echo "Unsupported macOS runner architecture: $host_arch" >&2
+              exit 1
+              ;;
+          esac
+          echo "Using host architecture $host_arch, .NET runtime $dotnet_runtime_arch, and simulator target $simulator_rid"
           echo "DOTNET_ROOT=$dotnet_root" >> "$GITHUB_ENV"
-          echo "DOTNET_ROOT_ARM64=$dotnet_root" >> "$GITHUB_ENV"
+          echo "IOS_SIMULATOR_RID=$simulator_rid" >> "$GITHUB_ENV"
           export DOTNET_ROOT="$dotnet_root"
-          export DOTNET_ROOT_ARM64="$dotnet_root"
+          if [ -n "$dotnet_root_arm64" ]; then
+            echo "DOTNET_ROOT_ARM64=$dotnet_root_arm64" >> "$GITHUB_ENV"
+            export DOTNET_ROOT_ARM64="$dotnet_root_arm64"
+          else
+            unset DOTNET_ROOT_ARM64 || true
+          fi
           printf '{"sdk":{"version":"%s","rollForward":"latestPatch"}}\n' "$sdk11_version" > "$RUNNER_TEMP/global.json"
           echo "Checking iOS workload for .NET SDK $sdk11_version"
           dotnet --version
@@ -255,7 +278,7 @@ jobs:
           printf '{"sdk":{"version":"%s","rollForward":"latestPatch"}}\n' "$sdk9_version" > "$RUNNER_TEMP/global.json"
           if ! dotnet --list-runtimes | grep -Eq '^Microsoft.NETCore.App 6\.0\.'; then
             curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
-            bash "$RUNNER_TEMP/dotnet-install.sh" --runtime dotnet --version 6.0.36 --architecture arm64 --install-dir "$DOTNET_ROOT"
+            bash "$RUNNER_TEMP/dotnet-install.sh" --runtime dotnet --version 6.0.36 --architecture "$dotnet_runtime_arch" --install-dir "$DOTNET_ROOT"
           fi
           if [ ! -d "$DOTNET_ROOT/shared/Microsoft.NETCore.App/6.0.36" ]; then
             echo 'The .NET 6 runtime required by the compatibility tools was not installed.' >&2
@@ -302,7 +325,7 @@ jobs:
           smoke_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/IOSInterpreterSmoke.csproj"
           fixture_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/ProbeFixture/ProbeFixture.csproj"
           dotnet build "$fixture_project" --configuration Release
-          dotnet build "$smoke_project" --configuration Release -r iossimulator-arm64
+          dotnet build "$smoke_project" --configuration Release -r "$IOS_SIMULATOR_RID"
           app_path="$(find "$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/bin/Release/net11.0-ios" -maxdepth 3 -type d -name 'IOSInterpreterSmoke.app' -print -quit)"
           if [ -z "$app_path" ]; then
             echo 'The iOS interpreter smoke app bundle was not produced.' >&2
