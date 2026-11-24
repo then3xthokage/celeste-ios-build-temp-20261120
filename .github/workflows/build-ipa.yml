@@ -295,7 +295,7 @@ jobs:
           }
           printf '{"sdk":{"version":"11.0.100","rollForward":"latestPatch"}}\n' > "$RUNNER_TEMP/global.json"
           # The smoke app needs NLua's managed code generator, not its device-only Lua framework.
-          dotnet build "$GITHUB_WORKSPACE/Everest/external/NLua/build/net8.0/NLua.net8.0.csproj" --configuration Release
+          dotnet build "$GITHUB_WORKSPACE/Everest/external/NLua/build/net8.0/NLua.net8.0.csproj" --configuration Release -m:1 -p:BuildInParallel=false -p:UseSharedCompilation=false
           # This job has a fresh macOS checkout, so build Everest's managed API here before
           # the smoke app references its legacy Hook and Detour entry points.
           dotnet build "$GITHUB_WORKSPACE/Everest/Celeste.Mod.mm/Celeste.Mod.mm.csproj" --configuration Release
