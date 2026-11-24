@@ -442,27 +442,33 @@ import sys
 root = pathlib.Path(sys.argv[1])
 fmod_libraries = ("libfmodstudio", "libfmod", "fmodstudio", "fmod")
 fmod_counts = {library: 0 for library in fmod_libraries}
-fmod_dynamic_counts = {"FMOD_DSP_GetCPUUsage": 0}
 
-def keep_unavailable_imports_dynamic(source, fallback_libraries):
-    pattern = re.compile(
-        r'(?P<prefix>\[\s*DllImport\s*\(\s*)'
-        r'(?P<library>"__Internal"|"celeste-ios-native"|nativeLibName)'
-        r'(?P<arguments>[^\]]*\])'
-        r'(?P<declaration>[^;{}]*?\b(?P<method>[A-Za-z_]\w*)\s*\()',
-        re.S,
+# FMOD's iOS static archive does not export the DSP CPU-metering entry point.
+# Keep its managed API callable and report FMOD's documented unsupported result
+# instead of turning it into a missing native import at launch.
+dsp_source_path = root / "FMOD" / "DSP.cs"
+dsp_source = dsp_source_path.read_text()
+cpu_usage_import = re.compile(
+    r'(?m)^\s*\[DllImport\("fmod"\)\]\s*\n'
+    r'\s*public static extern RESULT FMOD_DSP_GetCPUUsage\('
+    r'IntPtr dsp, out uint exclusive, out uint inclusive\);'
+)
+dsp_source, cpu_usage_shims = cpu_usage_import.subn(
+    "\t\tpublic static RESULT FMOD_DSP_GetCPUUsage(IntPtr dsp, out uint exclusive, out uint inclusive)\n"
+    "\t\t{\n"
+    "\t\t\texclusive = 0;\n"
+    "\t\t\tinclusive = 0;\n"
+    "\t\t\treturn RESULT.ERR_UNSUPPORTED;\n"
+    "\t\t}",
+    dsp_source,
+)
+if cpu_usage_shims != 1:
+    raise SystemExit(
+        "Expected one FMOD_DSP_GetCPUUsage import in FMOD/DSP.cs; found "
+        + str(cpu_usage_shims)
     )
-    matches = list(pattern.finditer(source))
-    for match in reversed(matches):
-        method = match.group("method")
-        entrypoint = re.search(r'\bEntryPoint\s*=\s*"([^"]+)"', match.group("arguments"))
-        native_symbol = entrypoint.group(1) if entrypoint else method
-        fallback = fallback_libraries.get(native_symbol) or fallback_libraries.get(method)
-        if fallback is not None:
-            start, end = match.span("library")
-            source = source[:start] + f'"{fallback}"' + source[end:]
-            fmod_dynamic_counts[native_symbol] += 1
-    return source
+dsp_source_path.write_text(dsp_source)
+print("Replaced unavailable iOS import FMOD_DSP_GetCPUUsage with an FMOD ERR_UNSUPPORTED managed fallback.")
 
 for path in root.rglob("*.cs"):
     source = path.read_text()
@@ -473,16 +479,12 @@ for path in root.rglob("*.cs"):
         )
         updated, count = pattern.subn(r'\1"celeste-ios-native"', updated)
         fmod_counts[library] += count
-    updated = keep_unavailable_imports_dynamic(updated, {"FMOD_DSP_GetCPUUsage": "fmod"})
     if updated != source:
         path.write_text(updated)
 
 if sum(fmod_counts.values()) == 0:
     raise SystemExit("Could not find any FMOD DllImport declarations to link statically")
 print("Patched FMOD native imports: " + ", ".join(f"{name}={count}" for name, count in fmod_counts.items()))
-if fmod_dynamic_counts["FMOD_DSP_GetCPUUsage"] == 0:
-    raise SystemExit("Could not preserve the unavailable FMOD_DSP_GetCPUUsage import dynamically")
-print("Kept unavailable FMOD import dynamic: FMOD_DSP_GetCPUUsage")
 settings = root / "Celeste" / "Settings.cs"
 source = settings.read_text()
 start = source.find('[XmlAnyElement("LaunchInDebugModeComment")]')
@@ -827,11 +829,8 @@ fi
 
 info "generating the native export list for runtime-loaded Celeste, FNA, and Everest code"
 native_export_manifest="$script_dir/ios-native-exports.txt"
-if ! cp "$native_import_manifest" "$native_export_manifest" || \
-	! printf '%s\n' "_SDL_iPhoneSetEventPump" >> "$native_export_manifest"; then
-	error "failed to initialize the native export list"
-	exit 1
-fi
+native_arm64_exports="$RUNNER_TEMP/ios-native-arm64-exports.txt"
+: > "$native_arm64_exports"
 native_archives=(
 	"$script_dir/celestemeow/libSDL2.a"
 	"$script_dir/celestemeow/libFNA3D.a"
@@ -846,16 +845,36 @@ for archive in "${native_archives[@]}"; do
 		error "native archive for export collection is missing: $archive"
 		exit 1
 	fi
-	if ! (set -o pipefail; nm -gU "$archive" | awk 'NF >= 3 && $NF ~ /^_/ { print $NF }' >> "$native_export_manifest"); then
-		error "failed to collect global native exports from $(basename "$archive")"
+	if ! (set -o pipefail; nm -arch arm64 -gU "$archive" | awk 'NF >= 3 && $NF ~ /^_/ { print $NF }' >> "$native_arm64_exports"); then
+		error "failed to collect arm64 native exports from $(basename "$archive")"
 		exit 1
 	fi
 done
-if ! LC_ALL=C sort -u "$native_export_manifest" -o "$native_export_manifest" || ! [ -s "$native_export_manifest" ]; then
-	error "failed to finalize the native export list"
+
+if ! LC_ALL=C sort -u "$native_arm64_exports" -o "$native_arm64_exports" || ! [ -s "$native_arm64_exports" ]; then
+	error "failed to finalize the arm64 native export list"
 	exit 1
 fi
-info "collected $(wc -l < "$native_export_manifest" | tr -d ' ') native symbols for the iOS executable export list"
+missing_arm64_imports="$RUNNER_TEMP/ios-native-missing-arm64-imports.txt"
+if ! comm -23 "$native_import_manifest" "$native_arm64_exports" > "$missing_arm64_imports"; then
+	error "failed to compare managed imports with arm64 native exports"
+	exit 1
+fi
+if [ -s "$missing_arm64_imports" ]; then
+	error "managed native imports are not implemented by the linked arm64 archives:"
+	cat "$missing_arm64_imports" >&2
+	exit 1
+fi
+
+if ! cp "$native_import_manifest" "$native_export_manifest" || \
+	! printf '%s\n' "_SDL_iPhoneSetEventPump" >> "$native_export_manifest" || \
+	! cat "$native_arm64_exports" >> "$native_export_manifest" || \
+	! LC_ALL=C sort -u "$native_export_manifest" -o "$native_export_manifest" || \
+	! [ -s "$native_export_manifest" ]; then
+	error "failed to finalize the arm64 native export list"
+	exit 1
+fi
+info "collected $(wc -l < "$native_export_manifest" | tr -d ' ') arm64 native symbols for the iOS executable export list"
 
 if ! dotnet publish "$script_dir/celestemeow/ci-ios.csproj" \
 	--configuration Release \
