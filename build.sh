@@ -487,7 +487,7 @@ PY
 info "enabled mod archives will be loaded through Everest"
 
 info "building the patched game"
-if ! dotnet publish --configuration Release; then error "failed to build the game!"; exit 1; fi
+if ! dotnet publish --configuration Release -p:PlatformTarget=AnyCPU -p:Prefer32Bit=false; then error "failed to build the game!"; exit 1; fi
 
 cd "$script_dir" || cd_fail
 
@@ -601,6 +601,67 @@ for assembly in "$everest_runtime"/*.dll; do
 		exit 1
 	fi
 done
+
+info "checking that the patched Celeste assembly is portable to iOS arm64"
+python3 - "$script_dir/celeste/Celeste.dll" <<'PY'
+import pathlib
+import struct
+import sys
+
+path = pathlib.Path(sys.argv[1])
+data = path.read_bytes()
+if len(data) < 64 or data[:2] != b"MZ":
+    raise SystemExit(f"{path} is not a valid PE assembly")
+
+pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+if pe_offset + 24 > len(data) or data[pe_offset:pe_offset + 4] != b"PE\0\0":
+    raise SystemExit(f"{path} has an invalid PE header")
+
+machine, section_count = struct.unpack_from("<HH", data, pe_offset + 4)
+optional_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
+optional = pe_offset + 24
+magic = struct.unpack_from("<H", data, optional)[0]
+if magic == 0x10B:
+    directory_offset, directory_count_offset = optional + 96, optional + 92
+elif magic == 0x20B:
+    directory_offset, directory_count_offset = optional + 112, optional + 108
+else:
+    raise SystemExit(f"{path} has unsupported PE optional-header format {magic:#x}")
+
+directory_count = struct.unpack_from("<I", data, directory_count_offset)[0]
+if directory_count <= 14:
+    raise SystemExit(f"{path} has no CLR data directory")
+cli_rva, _ = struct.unpack_from("<II", data, directory_offset + 14 * 8)
+section_table = optional + optional_size
+sections = []
+for index in range(section_count):
+    section = section_table + index * 40
+    virtual_size, virtual_address, raw_size, raw_offset = struct.unpack_from("<IIII", data, section + 8)
+    sections.append((virtual_address, max(virtual_size, raw_size), raw_size, raw_offset))
+
+cli_offset = None
+for virtual_address, span, raw_size, raw_offset in sections:
+    if virtual_address <= cli_rva < virtual_address + span:
+        candidate = raw_offset + cli_rva - virtual_address
+        if cli_rva - virtual_address >= raw_size:
+            break
+        cli_offset = candidate
+        break
+if cli_offset is None or cli_offset + 20 > len(data):
+    raise SystemExit(f"{path} has an invalid CLR header")
+
+flags = struct.unpack_from("<I", data, cli_offset + 16)[0]
+if machine != 0x014C:
+    raise SystemExit(f"{path} is not portable MSIL (PE machine is {machine:#06x})")
+if not flags & 0x1:
+    raise SystemExit(f"{path} contains mixed-mode code, which cannot run in the iOS managed runtime")
+if flags & 0x2:
+    raise SystemExit(f"{path} still requires a 32-bit process")
+if flags & 0x20000:
+    raise SystemExit(f"{path} still prefers a 32-bit process")
+
+print(f"Verified portable MSIL Celeste assembly: PE machine {machine:#06x}, CorFlags {flags:#x}")
+PY
 
 mkdir -p "$script_dir/celestemeow/celeste"
 copy_game_files "$script_dir/celeste/mscorlib.dll" "$script_dir/celestemeow/celeste/"
