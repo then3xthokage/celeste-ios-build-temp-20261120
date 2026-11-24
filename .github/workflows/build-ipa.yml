@@ -1,6 +1,9 @@
 name: Build Celeste iOS IPA
 
 on:
+  push:
+    branches:
+      - celeste-ios-build
   workflow_dispatch:
     inputs:
       publish_device_test_ipa:
