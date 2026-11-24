@@ -400,7 +400,8 @@ jobs:
             echo 'The iOS interpreter smoke app bundle was not produced.' >&2
             exit 1
           fi
-          device_list="$(run_with_timeout 60 xcrun simctl list devices available -j)"
+          # simctl can spend several minutes starting CoreSimulator on a fresh macOS runner.
+          device_list="$(run_with_timeout 300 xcrun simctl list devices available -j)"
           device_id="$(printf '%s' "$device_list" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((x["udid"] for xs in d["devices"].values() for x in xs if x.get("isAvailable") and x["name"].startswith("iPhone")), ""))')"
           if [ -z "$device_id" ]; then
             echo 'No available iPhone simulator was found on the runner.' >&2
