@@ -231,7 +231,7 @@ if [ -n "${ILSPYCMD_DLL:-}" ]; then
 		error "the preloaded ilspycmd assembly was not found"
 		exit 1
 	fi
-	ilspycmd() { dotnet "$ILSPYCMD_DLL" "$@"; }
+	ilspycmd() { DOTNET_gcServer=0 DOTNET_GCConserveMemory=6 dotnet "$ILSPYCMD_DLL" "$@"; }
 fi
 if ! command -v ilspycmd &>/dev/null; then
 	info "ilspycmd is not installed, attempting to install it using dotnet"
