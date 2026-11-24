@@ -22,6 +22,7 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        VerifyLinkedNativeImportResolution();
         VerifyIOSSDLHostBoundary();
         VerifyLauncherProjectBoundary();
         VerifyBundledRuntimeAssemblyResolver();
@@ -358,6 +359,24 @@ internal static class Program
         Console.WriteLine("Typed hook smoke passed: woven=" + wovenCount + "; patched Everest On/IL integration and removal; full-body Everest constructor wrappers with branches; direct LegacyDetour constructor calls and original trampolines; open generic IL, reflected On hooks, and detours across generic methods and declaring types; native decoder imports; hookable Windows HLS import shim; app-bundle and in-memory mod dependency resolution; ref-return, exact ref-readonly modifiers, in/ref, Span, pointer and function-pointer signatures; value-type instance detours and constructors; branchy and generic constructor chains; static constructors; generic type/method combinations; reflected callbacks; and cross-load-context dispatch.");
         return 0;
     }
+
+    private static void VerifyLinkedNativeImportResolution()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        List<string> trace = new List<string>();
+        IOSRuntimeAssemblyResolver.Attach(AssemblyLoadContext.Default, AppContext.BaseDirectory, trace.Add);
+        if (GetProcessIdFromLinkedNativeModule() <= 0)
+            throw new InvalidOperationException("The __Internal import resolver did not call the linked process library.");
+        if (!trace.Any(message => message.StartsWith("Resolved __Internal native imports from ", StringComparison.Ordinal)))
+            throw new InvalidOperationException("The __Internal P/Invoke did not pass through the runtime native resolver.");
+
+        Console.WriteLine("PASS runtime-loaded __Internal P/Invokes resolve against the main program handle.");
+    }
+
+    [DllImport("__Internal", EntryPoint = "getpid", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int GetProcessIdFromLinkedNativeModule();
 
     private static void VerifyIOSSDLHostBoundary()
     {

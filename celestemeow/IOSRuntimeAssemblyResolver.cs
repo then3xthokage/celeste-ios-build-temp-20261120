@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 
 namespace celestemeow
@@ -45,6 +46,36 @@ namespace celestemeow
 
             string fullBaseDirectory = Path.GetFullPath(appBaseDirectory);
             context.Resolving += (loadContext, requested) => Resolve(loadContext, requested, fullBaseDirectory, trace);
+            context.ResolvingUnmanagedDll += (assembly, libraryName) =>
+                ResolveLinkedNativeLibrary(assembly, libraryName, trace);
+        }
+
+        private static IntPtr ResolveLinkedNativeLibrary(Assembly assembly, string libraryName, Action<string> trace)
+        {
+            if (!string.Equals(libraryName, "__Internal", StringComparison.Ordinal))
+                return IntPtr.Zero;
+
+            try
+            {
+                // Celeste and FNA are loaded after app linking, so their __Internal imports need the executable handle.
+                IntPtr mainProgram = NativeLibrary.GetMainProgramHandle();
+                if (mainProgram == IntPtr.Zero)
+                {
+                    SafeTrace(trace, "Could not obtain the iOS executable handle for __Internal imports from " +
+                        (assembly?.GetName().Name ?? "an unknown assembly") + ".");
+                    return IntPtr.Zero;
+                }
+
+                SafeTrace(trace, "Resolved __Internal native imports from " +
+                    (assembly?.GetName().Name ?? "an unknown assembly") + " against the app executable.");
+                return mainProgram;
+            }
+            catch (Exception exception)
+            {
+                SafeTrace(trace, "Could not resolve __Internal imports from " +
+                    (assembly?.GetName().Name ?? "an unknown assembly") + " against the app executable: " + exception);
+                return IntPtr.Zero;
+            }
         }
 
         private static Assembly Resolve(

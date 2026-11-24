@@ -798,6 +798,15 @@ for symbol in tf_audioinfo tf_close tf_eos tf_fopen tf_gettheorasize tf_granpos_
 	fi
 done
 
+info "collecting linked native imports from runtime-loaded managed assemblies"
+native_import_manifest="$script_dir/ios-native-imports.txt"
+managed_native_assemblies=( "$script_dir/celeste/Celeste.dll" "$script_dir/celeste/FNA.dll" "$everest_runtime"/*.dll )
+if ! dotnet run --project "$script_dir/tools/IOSNativeImportPatcher/IOSNativeImportPatcher.csproj" \
+	--configuration Release -- --write-internal-imports "$native_import_manifest" "${managed_native_assemblies[@]}"; then
+	error "failed to collect linked native imports from runtime assemblies"
+	exit 1
+fi
+
 if ! dotnet publish "$script_dir/celestemeow/ci-ios.csproj" \
 	--configuration Release \
 	--runtime ios-arm64 \
@@ -814,8 +823,8 @@ if [ -z "$ipa_path" ]; then
 	error "the iOS app package was not generated"
 	exit 1
 fi
-if ! python3 "$script_dir/tools/verify-ios-native-exports.py" "$ipa_path"; then
-	error "the packaged iOS app does not export every native symbol required by audited code mods"
+if ! python3 "$script_dir/tools/verify-ios-native-exports.py" "$ipa_path" --native-imports "$native_import_manifest"; then
+	error "the packaged iOS app does not export every native symbol required by the bundled runtime and audited code mods"
 	exit 1
 fi
 if ! mv "$ipa_path" "$script_dir/celestemeow.ipa"; then error "failed to move ipa"; exit 1; fi

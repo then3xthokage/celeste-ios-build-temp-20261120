@@ -13,6 +13,7 @@ REQUIRED_SYMBOLS = (
     "_SDL_SetHint",
     "_SDL_UIKitRunApp",
     "_SDL_ShowSimpleMessageBox",
+    "_SDL_GetPlatform",
     "_tf_gettheorasize",
     "_tf_granpos_dec",
     "_tf_readaudio2",
@@ -160,19 +161,30 @@ def exported_symbols(macho):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary_or_ipa", help="arm64 app executable or IPA archive")
+    parser.add_argument(
+        "--native-imports",
+        help="text file listing __Internal P/Invoke entry points required by bundled managed assemblies",
+    )
     arguments = parser.parse_args()
     try:
         verify_managed_bundle(arguments.binary_or_ipa)
         symbols = exported_symbols(read_macho(arguments.binary_or_ipa))
+        required_symbols = set(REQUIRED_SYMBOLS)
+        if arguments.native_imports:
+            with open(arguments.native_imports, "r", encoding="utf-8") as stream:
+                required_symbols.update(
+                    line.strip() for line in stream
+                    if line.strip() and not line.lstrip().startswith("#")
+                )
     except Exception as error:
         print("iOS native export verification failed: " + str(error), file=sys.stderr)
         return 1
 
-    missing = [symbol for symbol in REQUIRED_SYMBOLS if symbol not in symbols]
+    missing = sorted(symbol for symbol in required_symbols if symbol not in symbols)
     if missing:
-        print("iOS executable is missing mod-required exports: " + ", ".join(missing), file=sys.stderr)
+        print("iOS executable is missing required native exports: " + ", ".join(missing), file=sys.stderr)
         return 1
-    print("iOS executable exports all %d required VidPlayer and mod-native entry points." % len(REQUIRED_SYMBOLS))
+    print("iOS executable exports all %d required native entry points." % len(required_symbols))
     return 0
 
 

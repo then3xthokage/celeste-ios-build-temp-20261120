@@ -18,9 +18,12 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        if (args.Length >= 3 && string.Equals(args[0], "--write-internal-imports", StringComparison.Ordinal))
+            return WriteInternalImportManifest(args[1], args.Skip(2));
+
         if (args.Length != 2)
         {
-            Console.Error.WriteLine("Usage: IOSNativeImportPatcher <input-assembly> <output-assembly>");
+            Console.Error.WriteLine("Usage: IOSNativeImportPatcher <input-assembly> <output-assembly> | --write-internal-imports <output-file> <assembly>...");
             return 2;
         }
 
@@ -104,6 +107,47 @@ internal static class Program
         }
 
         Console.WriteLine("Rewrote native imports: " + string.Join(", ", rewritten) + "; replaced " + stubbedPlatformImports + " Android, Windows, and GDK SDL imports with managed default stubs.");
+        return 0;
+    }
+
+    private static int WriteInternalImportManifest(string outputPath, IEnumerable<string> assemblyPaths)
+    {
+        HashSet<string> symbols = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string assemblyPath in assemblyPaths)
+        {
+            if (!File.Exists(assemblyPath))
+                throw new FileNotFoundException("Assembly for native import manifest was not found.", assemblyPath);
+
+            using (AssemblyDefinition assembly = AssemblyDefinition.ReadAssembly(
+                assemblyPath,
+                new ReaderParameters { InMemory = true, ReadSymbols = false }))
+            {
+                foreach (TypeDefinition type in AllTypes(assembly.MainModule.Types))
+                foreach (MethodDefinition method in type.Methods)
+                {
+                    PInvokeInfo info = method.PInvokeInfo;
+                    if (!method.IsPInvokeImpl || info == null ||
+                        !string.Equals(info.Module?.Name, "__Internal", StringComparison.Ordinal))
+                        continue;
+
+                    string entryPoint = string.IsNullOrEmpty(info.EntryPoint) ? method.Name : info.EntryPoint;
+                    symbols.Add("_" + entryPoint);
+                }
+            }
+        }
+
+        if (symbols.Count == 0)
+        {
+            Console.Error.WriteLine("No __Internal P/Invoke entry points were found in the supplied assemblies.");
+            return 1;
+        }
+
+        string fullOutputPath = Path.GetFullPath(outputPath);
+        string outputDirectory = Path.GetDirectoryName(fullOutputPath);
+        if (!string.IsNullOrEmpty(outputDirectory))
+            Directory.CreateDirectory(outputDirectory);
+        File.WriteAllLines(fullOutputPath, symbols.OrderBy(symbol => symbol, StringComparer.Ordinal));
+        Console.WriteLine("Wrote " + symbols.Count + " __Internal native imports to " + fullOutputPath + ".");
         return 0;
     }
 
