@@ -57,6 +57,23 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: dotnet run --configuration Release --project "$GITHUB_WORKSPACE/tools/IOSModLibrarySmoke/IOSModLibrarySmoke.csproj"
 
+      - name: Package tested managed runtime for simulator smoke
+        run: |
+          set -euo pipefail
+          test -s Everest/Celeste.Mod.mm/bin/Release/net8.0/Celeste.Mod.mm.dll
+          test -s Everest/Celeste.Mod.mm/bin/Release/net8.0/MonoMod.RuntimeDetour.dll
+          test -s Everest/external/NLua/lib/Release/net8.0/NLua.dll
+          tar -czf "$RUNNER_TEMP/everest-managed-smoke.tar.gz" \
+            Everest/Celeste.Mod.mm/bin/Release/net8.0/*.dll \
+            Everest/external/NLua/lib/Release/net8.0/NLua.dll
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: celeste-ios-managed-smoke
+          path: ${{ runner.temp }}/everest-managed-smoke.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
   build:
     needs: verify
     if: github.ref == 'refs/heads/celeste-ios-build'
@@ -77,6 +94,14 @@ jobs:
 
       - name: Apply the iOS MonoMod runtime fix
         run: git -C Everest/external/MonoMod apply ../../../patches/MonoMod-ios.patch
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: celeste-ios-managed-smoke
+          path: ${{ runner.temp }}
+
+      - name: Restore tested managed runtime for simulator smoke
+        run: tar -xzf "$RUNNER_TEMP/everest-managed-smoke.tar.gz" -C "$GITHUB_WORKSPACE"
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -317,11 +342,9 @@ jobs:
           PY
           }
           printf '{"sdk":{"version":"11.0.100","rollForward":"latestPatch"}}\n' > "$RUNNER_TEMP/global.json"
-          # The smoke app needs NLua's managed code generator, not its device-only Lua framework.
-          dotnet build "$GITHUB_WORKSPACE/Everest/external/NLua/build/net8.0/NLua.net8.0.csproj" --configuration Release -m:1 -p:BuildInParallel=false -p:UseSharedCompilation=false
-          # This job has a fresh macOS checkout, so build Everest's managed API here before
-          # the smoke app references its legacy Hook and Detour entry points.
-          dotnet build "$GITHUB_WORKSPACE/Everest/Celeste.Mod.mm/Celeste.Mod.mm.csproj" --configuration Release
+          # Reuse the managed runtime built and tested by the verify job. These assemblies are
+          # architecture-neutral, and rebuilding Everest/NLua on this constrained simulator
+          # runner needlessly doubles compilation memory.
           smoke_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/IOSInterpreterSmoke.csproj"
           fixture_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/ProbeFixture/ProbeFixture.csproj"
           dotnet build "$fixture_project" --configuration Release
