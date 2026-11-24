@@ -874,6 +874,26 @@ if ! comm -23 "$native_import_manifest" "$native_arm64_exports" > "$missing_arm6
 	error "failed to compare managed imports with arm64 native exports"
 	exit 1
 fi
+# The SDL error APIs below are defined as private-external arm64 symbols in the
+# linked SDL archive. Apple nm's -g output omits them; the preceding arm64 link
+# resolved them, and the final IPA export verifier checks them explicitly.
+known_private_external_arm64_imports=(
+	"_SDL_ClearError"
+	"_SDL_GetError"
+	"_SDL_GetErrorMsg"
+	"_SDL_SetError"
+)
+for symbol in "${known_private_external_arm64_imports[@]}"; do
+	if grep -Fxq "$symbol" "$missing_arm64_imports"; then
+		printf '%s\n' "$symbol" >> "$private_arm64_imports"
+	fi
+done
+if ! LC_ALL=C sort -u "$private_arm64_imports" -o "$private_arm64_imports" || \
+	! comm -23 "$missing_arm64_imports" "$private_arm64_imports" > "$missing_arm64_imports.tmp" || \
+	! mv "$missing_arm64_imports.tmp" "$missing_arm64_imports"; then
+	error "failed to resolve known private-external arm64 imports"
+	exit 1
+fi
 if [ -s "$missing_arm64_imports" ]; then
 	error "managed native imports are not implemented by the linked arm64 archives:"
 	cat "$missing_arm64_imports" >&2
