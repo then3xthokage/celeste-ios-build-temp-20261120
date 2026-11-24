@@ -451,7 +451,7 @@ jobs:
             --clobber
 
       - name: Store IPA in private device-test release
-        if: inputs.publish_device_test_ipa == true
+        if: github.event_name == 'push' || inputs.publish_device_test_ipa == true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
