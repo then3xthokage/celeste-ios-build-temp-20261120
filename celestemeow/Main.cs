@@ -106,7 +106,7 @@ namespace celestemeow
             return completion.Task;
         }
 
-        [DllImport("__Internal", EntryPoint = "SDL_iPhoneSetEventPump", CallingConvention = CallingConvention.Cdecl)]
+        [DllImport("celeste-ios-native", EntryPoint = "SDL_iPhoneSetEventPump", CallingConvention = CallingConvention.Cdecl)]
         static extern void SetSdlEventPump(int enabled);
 
 #pragma warning disable CA2255

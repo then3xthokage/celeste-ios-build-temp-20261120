@@ -9,21 +9,22 @@ internal static class Program
 {
     private static readonly Dictionary<string, string> StaticLibraries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
-        ["SDL2"] = "__Internal",
-        ["FNA3D"] = "__Internal",
-        ["FAudio"] = "__Internal",
-        ["libtheorafile"] = "__Internal",
-        ["theorafilebun"] = "__Internal"
+        ["SDL2"] = "celeste-ios-native",
+        ["FNA3D"] = "celeste-ios-native",
+        ["FAudio"] = "celeste-ios-native",
+        ["libtheorafile"] = "celeste-ios-native",
+        ["theorafilebun"] = "celeste-ios-native",
+        ["__Internal"] = "celeste-ios-native"
     };
 
     private static int Main(string[] args)
     {
-        if (args.Length >= 3 && string.Equals(args[0], "--write-internal-imports", StringComparison.Ordinal))
-            return WriteInternalImportManifest(args[1], args.Skip(2));
+        if (args.Length >= 3 && string.Equals(args[0], "--write-ios-native-imports", StringComparison.Ordinal))
+            return WriteIOSNativeImportManifest(args[1], args.Skip(2));
 
         if (args.Length != 2)
         {
-            Console.Error.WriteLine("Usage: IOSNativeImportPatcher <input-assembly> <output-assembly> | --write-internal-imports <output-file> <assembly>...");
+            Console.Error.WriteLine("Usage: IOSNativeImportPatcher <input-assembly> <output-assembly> | --write-ios-native-imports <output-file> <assembly>...");
             return 2;
         }
 
@@ -34,6 +35,7 @@ internal static class Program
 
         Dictionary<string, int> rewritten = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         int stubbedPlatformImports = 0;
+        int linkedSDLImports = 0;
         using (AssemblyDefinition assembly = AssemblyDefinition.ReadAssembly(input, new ReaderParameters { InMemory = true, ReadSymbols = false }))
         {
             Dictionary<string, ModuleReference> moduleReferences = assembly.MainModule.ModuleReferences
@@ -45,9 +47,14 @@ internal static class Program
                 {
                     PInvokeInfo info = method.PInvokeInfo;
                     string library = info.Module?.Name;
+                    string entryPoint = string.IsNullOrEmpty(info.EntryPoint) ? method.Name : info.EntryPoint;
+                    if ((string.Equals(library, "celeste-ios-native", StringComparison.Ordinal) ||
+                         string.Equals(library, "__Internal", StringComparison.Ordinal)) &&
+                        entryPoint.StartsWith("SDL_", StringComparison.Ordinal))
+                        linkedSDLImports++;
+
                     if (library != null && StaticLibraries.TryGetValue(library, out string pinvokeReplacement))
                     {
-                        string entryPoint = string.IsNullOrEmpty(info.EntryPoint) ? method.Name : info.EntryPoint;
                         if (string.Equals(library, "SDL2", StringComparison.OrdinalIgnoreCase) && IsPlatformOnlySDLImport(entryPoint))
                         {
                             ConvertToManagedDefaultStub(method);
@@ -98,7 +105,7 @@ internal static class Program
         }
 
         List<string> missing = new List<string>();
-        if (!rewritten.TryGetValue("SDL2", out int sdlImports) || sdlImports == 0)
+        if ((!rewritten.TryGetValue("SDL2", out int sdlImports) || sdlImports == 0) && linkedSDLImports == 0)
             missing.Add("SDL2");
         if (missing.Count > 0)
         {
@@ -106,13 +113,14 @@ internal static class Program
             return 1;
         }
 
-        Console.WriteLine("Rewrote native imports: " + string.Join(", ", rewritten) + "; replaced " + stubbedPlatformImports + " Android, Windows, and GDK SDL imports with managed default stubs.");
+        Console.WriteLine("Rewrote native imports: " + string.Join(", ", rewritten) + "; linked SDL imports=" + linkedSDLImports + "; replaced " + stubbedPlatformImports + " Android, Windows, and GDK SDL imports with managed default stubs.");
         return 0;
     }
 
-    private static int WriteInternalImportManifest(string outputPath, IEnumerable<string> assemblyPaths)
+    private static int WriteIOSNativeImportManifest(string outputPath, IEnumerable<string> assemblyPaths)
     {
         HashSet<string> symbols = new HashSet<string>(StringComparer.Ordinal);
+        List<string> unresolvedInternalImports = new List<string>();
         foreach (string assemblyPath in assemblyPaths)
         {
             if (!File.Exists(assemblyPath))
@@ -126,8 +134,17 @@ internal static class Program
                 foreach (MethodDefinition method in type.Methods)
                 {
                     PInvokeInfo info = method.PInvokeInfo;
-                    if (!method.IsPInvokeImpl || info == null ||
-                        !string.Equals(info.Module?.Name, "__Internal", StringComparison.Ordinal))
+                    if (!method.IsPInvokeImpl || info == null)
+                        continue;
+
+                    string libraryName = info.Module?.Name;
+                    if (string.Equals(libraryName, "__Internal", StringComparison.Ordinal) &&
+                        !string.Equals(Path.GetFileName(assemblyPath), "mscorlib.dll", StringComparison.OrdinalIgnoreCase))
+                    {
+                        unresolvedInternalImports.Add(Path.GetFileName(assemblyPath) + "!" + type.FullName + "." + method.Name);
+                        continue;
+                    }
+                    if (!string.Equals(libraryName, "celeste-ios-native", StringComparison.Ordinal))
                         continue;
 
                     string entryPoint = string.IsNullOrEmpty(info.EntryPoint) ? method.Name : info.EntryPoint;
@@ -136,9 +153,17 @@ internal static class Program
             }
         }
 
+        if (unresolvedInternalImports.Count > 0)
+        {
+            Console.Error.WriteLine("The runtime assembly set still contains __Internal imports that bypass the iOS resolver:");
+            foreach (string import in unresolvedInternalImports)
+                Console.Error.WriteLine("  " + import);
+            return 1;
+        }
+
         if (symbols.Count == 0)
         {
-            Console.Error.WriteLine("No __Internal P/Invoke entry points were found in the supplied assemblies.");
+            Console.Error.WriteLine("No iOS linked-native P/Invoke entry points were found in the supplied assemblies.");
             return 1;
         }
 
@@ -147,7 +172,7 @@ internal static class Program
         if (!string.IsNullOrEmpty(outputDirectory))
             Directory.CreateDirectory(outputDirectory);
         File.WriteAllLines(fullOutputPath, symbols.OrderBy(symbol => symbol, StringComparer.Ordinal));
-        Console.WriteLine("Wrote " + symbols.Count + " __Internal native imports to " + fullOutputPath + ".");
+        Console.WriteLine("Wrote " + symbols.Count + " linked-native imports to " + fullOutputPath + ".");
         return 0;
     }
 

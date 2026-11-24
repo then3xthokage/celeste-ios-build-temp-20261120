@@ -16,13 +16,13 @@ namespace celestemeow
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         internal delegate int SDLMainFunction(int argc, IntPtr argv);
 
-        [DllImport("__Internal", EntryPoint = "SDL_SetHint", CallingConvention = CallingConvention.Cdecl)]
+        [DllImport("celeste-ios-native", EntryPoint = "SDL_SetHint", CallingConvention = CallingConvention.Cdecl)]
         private static extern int SetHintNative(IntPtr name, IntPtr value);
 
-        [DllImport("__Internal", EntryPoint = "SDL_UIKitRunApp", CallingConvention = CallingConvention.Cdecl)]
+        [DllImport("celeste-ios-native", EntryPoint = "SDL_UIKitRunApp", CallingConvention = CallingConvention.Cdecl)]
         private static extern int UIKitRunAppNative(int argc, IntPtr argv, SDLMainFunction mainFunction);
 
-        [DllImport("__Internal", EntryPoint = "SDL_ShowSimpleMessageBox", CallingConvention = CallingConvention.Cdecl)]
+        [DllImport("celeste-ios-native", EntryPoint = "SDL_ShowSimpleMessageBox", CallingConvention = CallingConvention.Cdecl)]
         private static extern int ShowMessageBoxNative(int flags, IntPtr title, IntPtr message, IntPtr window);
 
         internal static int SetHint(string name, string value)

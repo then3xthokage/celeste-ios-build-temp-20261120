@@ -362,21 +362,45 @@ internal static class Program
 
     private static void VerifyLinkedNativeImportResolution()
     {
+        string smokeProjectDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
+        string configuration = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar)).Name;
+        string probePath = Path.Combine(smokeProjectDirectory, "NativePInvokeFixture", "bin", configuration,
+            "net8.0", "NativePInvokeFixture.dll");
+        byte[] probeInput = File.ReadAllBytes(probePath);
+        byte[] probeImage = IOSHookWeaver.WeaveAssembly(probeInput, out string assemblyName, out _, out _,
+            Path.GetDirectoryName(probePath));
+        if (!string.Equals(assemblyName, "NativePInvokeFixture", StringComparison.Ordinal))
+            throw new InvalidOperationException("The linked-native import fixture could not be woven.");
+
+        using (Mono.Cecil.AssemblyDefinition rewritten = Mono.Cecil.AssemblyDefinition.ReadAssembly(new MemoryStream(probeImage)))
+        {
+            Mono.Cecil.MethodDefinition nativeMethod = rewritten.MainModule.GetType("NativePInvokeFixture")
+                .Methods.Single(method => method.Name == "GetProcessId");
+            if (nativeMethod.PInvokeInfo == null || nativeMethod.PInvokeInfo.Module.Name != IOSRuntimeAssemblyResolver.LinkedNativeLibraryName)
+                throw new InvalidOperationException("The mod weaver left an __Internal import on the runtime's special-case path.");
+        }
+
         if (OperatingSystem.IsWindows())
+        {
+            Console.WriteLine("PASS mod weaving rewrites __Internal to the managed iOS native alias.");
             return;
+        }
 
         List<string> trace = new List<string>();
         IOSRuntimeAssemblyResolver.Attach(AssemblyLoadContext.Default, AppContext.BaseDirectory, trace.Add);
-        if (GetProcessIdFromLinkedNativeModule() <= 0)
-            throw new InvalidOperationException("The __Internal import resolver did not call the linked process library.");
-        if (!trace.Any(message => message.StartsWith("Resolved __Internal native imports from ", StringComparison.Ordinal)))
-            throw new InvalidOperationException("The __Internal P/Invoke did not pass through the runtime native resolver.");
+        Assembly probeAssembly = AssemblyLoadContext.Default.LoadFromStream(new MemoryStream(probeImage));
+        Type probeType = probeAssembly.GetType("NativePInvokeFixture", throwOnError: true);
+        int processId = (int)probeType.GetMethod("GetProcessId", BindingFlags.Public | BindingFlags.Static)
+            .Invoke(null, null);
+        if (processId <= 0)
+            throw new InvalidOperationException("The late-loaded linked-native import did not call the process library.");
+        if (!trace.Any(message => message.StartsWith(
+                "Resolved linked native imports from NativePInvokeFixture against the app executable.",
+                StringComparison.Ordinal)))
+            throw new InvalidOperationException("The late-loaded native P/Invoke bypassed the per-assembly resolver.");
 
-        Console.WriteLine("PASS runtime-loaded __Internal P/Invokes resolve against the main program handle.");
+        Console.WriteLine("PASS late-loaded native P/Invokes resolve through the per-assembly main-program resolver.");
     }
-
-    [DllImport("__Internal", EntryPoint = "getpid", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int GetProcessIdFromLinkedNativeModule();
 
     private static void VerifyIOSSDLHostBoundary()
     {
@@ -391,14 +415,14 @@ internal static class Program
         if (IOSSDLInterop.MessageBoxError != 0x10)
             throw new InvalidOperationException("The SDL error dialog flag does not match SDL_MESSAGEBOX_ERROR.");
 
-        Console.WriteLine("PASS launcher SDL calls use direct __Internal imports without a static FNA dependency.");
+        Console.WriteLine("PASS launcher SDL calls use the per-assembly app-native resolver without a static FNA dependency.");
     }
 
     private static void VerifySDLImport(string methodName, string entryPoint)
     {
         MethodInfo method = typeof(IOSSDLInterop).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static);
         DllImportAttribute import = method?.GetCustomAttribute<DllImportAttribute>();
-        if (import == null || !string.Equals(import.Value, "__Internal", StringComparison.Ordinal) ||
+        if (import == null || !string.Equals(import.Value, IOSRuntimeAssemblyResolver.LinkedNativeLibraryName, StringComparison.Ordinal) ||
             !string.Equals(import.EntryPoint, entryPoint, StringComparison.Ordinal) ||
             import.CallingConvention != CallingConvention.Cdecl)
             throw new InvalidOperationException("The launcher SDL import is not configured correctly: " + methodName);
@@ -1235,7 +1259,7 @@ internal static class Program
     private static void AssertNativeImport(Mono.Cecil.TypeDefinition type, string methodName, string entryPoint)
     {
         Mono.Cecil.MethodDefinition method = type.Methods.Single(candidate => candidate.Name == methodName);
-        if (method.PInvokeInfo == null || method.PInvokeInfo.Module.Name != "__Internal" ||
+        if (method.PInvokeInfo == null || method.PInvokeInfo.Module.Name != IOSRuntimeAssemblyResolver.LinkedNativeLibraryName ||
             method.PInvokeInfo.EntryPoint != entryPoint)
             throw new InvalidOperationException("The iOS native importer did not map theorafilebun!" + entryPoint + " to the bundled native decoder.");
     }

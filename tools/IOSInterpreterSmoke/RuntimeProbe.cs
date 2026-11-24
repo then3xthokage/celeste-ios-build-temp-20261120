@@ -1,10 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using Mono.Cecil.Cil;
 using MonoMod;
 using MonoMod.Cil;
@@ -22,6 +25,30 @@ public static class RuntimeProbe
 
     public static void Run()
     {
+        Mark("late-loaded linked-native import resolver");
+        List<string> nativeTrace = new List<string>();
+        IOSRuntimeAssemblyResolver.Attach(AssemblyLoadContext.Default, AppContext.BaseDirectory, nativeTrace.Add);
+        if (GetProcessIdFromAppNativeAlias() <= 0)
+            throw new InvalidOperationException("The app assembly's linked-native alias did not resolve against the executable.");
+        using (Stream nativeImportResource = Assembly.GetExecutingAssembly().GetManifestResourceStream("NativePInvokeFixture.dll"))
+        {
+            if (nativeImportResource == null)
+                throw new FileNotFoundException("The linked-native import fixture was not embedded in the iOS smoke app.");
+            using MemoryStream nativeImportImage = new MemoryStream();
+            nativeImportResource.CopyTo(nativeImportImage);
+            byte[] linkedNativeFixture = IOSHookWeaver.WeaveAssembly(nativeImportImage.ToArray(),
+                out string nativeFixtureName, out _, out _, AppContext.BaseDirectory);
+            if (!string.Equals(nativeFixtureName, "NativePInvokeFixture", StringComparison.Ordinal))
+                throw new InvalidOperationException("The linked-native import fixture was not processed by the mod weaver.");
+            Assembly nativeImportAssembly = AssemblyLoadContext.Default.LoadFromStream(new MemoryStream(linkedNativeFixture));
+            Type nativeImportType = nativeImportAssembly.GetType("NativePInvokeFixture", throwOnError: true);
+            int processId = (int)nativeImportType.GetMethod("GetProcessId").Invoke(null, null);
+            if (processId <= 0 || !nativeTrace.Any(message => message.StartsWith(
+                    "Resolved linked native imports from NativePInvokeFixture against the app executable.",
+                    StringComparison.Ordinal)))
+                throw new InvalidOperationException("The late-loaded iOS native alias did not resolve through the app executable.");
+        }
+
         Mark("initialize hook runtime");
         IOSHookRuntime.Initialize();
         Mark("Reflection.Emit probes");
@@ -655,6 +682,9 @@ public static class RuntimeProbe
     }
 
     public static void RecordModuleInitializerHook() => moduleInitializerHookCalls++;
+
+    [DllImport("celeste-ios-native", EntryPoint = "getpid", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int GetProcessIdFromAppNativeAlias();
 
     private static byte[] ApplyEverestStyleConstructorShape(byte[] source)
     {

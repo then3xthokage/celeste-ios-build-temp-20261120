@@ -9,6 +9,10 @@ namespace celestemeow
 {
     internal static class IOSRuntimeAssemblyResolver
     {
+        internal const string LinkedNativeLibraryName = "celeste-ios-native";
+        private static readonly object NativeResolverLock = new object();
+        private static readonly HashSet<Assembly> NativeResolverAttempts = new HashSet<Assembly>();
+
         internal static string FindAssemblyPath(string appBundleDirectory, string assemblyName)
         {
             if (string.IsNullOrWhiteSpace(appBundleDirectory))
@@ -48,31 +52,73 @@ namespace celestemeow
             context.Resolving += (loadContext, requested) => Resolve(loadContext, requested, fullBaseDirectory, trace);
             context.ResolvingUnmanagedDll += (assembly, libraryName) =>
                 ResolveLinkedNativeLibrary(assembly, libraryName, trace);
+
+            // CoreCLR short-circuits __Internal before calling managed import resolvers.
+            // Game, FNA, and mod assemblies use LinkedNativeLibraryName so these callbacks can
+            // resolve their imports against the app executable.
+            AppDomain.CurrentDomain.AssemblyLoad += (sender, eventArgs) =>
+                RegisterNativeImportResolver(eventArgs.LoadedAssembly, trace);
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                RegisterNativeImportResolver(assembly, trace);
+        }
+
+        private static void RegisterNativeImportResolver(Assembly assembly, Action<string> trace)
+        {
+            if (assembly == null)
+                return;
+
+            lock (NativeResolverLock)
+            {
+                if (!NativeResolverAttempts.Add(assembly))
+                    return;
+            }
+
+            try
+            {
+                NativeLibrary.SetDllImportResolver(
+                    assembly,
+                    (libraryName, importingAssembly, searchPath) =>
+                        ResolveLinkedNativeLibrary(importingAssembly, libraryName, trace));
+                SafeTrace(trace, "Registered per-assembly native import resolver for " +
+                    (assembly.GetName().Name ?? "an unnamed assembly") + ".");
+            }
+            catch (InvalidOperationException exception)
+            {
+                // An assembly can own a resolver already. Its own import policy takes priority;
+                // the ALC event remains registered as the general fallback.
+                SafeTrace(trace, "Kept the existing per-assembly native import resolver for " +
+                    (assembly.GetName().Name ?? "an unnamed assembly") + ": " + exception.Message);
+            }
+            catch (Exception exception)
+            {
+                SafeTrace(trace, "Could not register a per-assembly native import resolver for " +
+                    (assembly.GetName().Name ?? "an unnamed assembly") + ": " + exception);
+            }
         }
 
         private static IntPtr ResolveLinkedNativeLibrary(Assembly assembly, string libraryName, Action<string> trace)
         {
-            if (!string.Equals(libraryName, "__Internal", StringComparison.Ordinal))
+            if (!string.Equals(libraryName, LinkedNativeLibraryName, StringComparison.Ordinal))
                 return IntPtr.Zero;
 
             try
             {
-                // Celeste and FNA are loaded after app linking, so their __Internal imports need the executable handle.
+                // Runtime-loaded managed assemblies need the executable handle for linked imports.
                 IntPtr mainProgram = NativeLibrary.GetMainProgramHandle();
                 if (mainProgram == IntPtr.Zero)
                 {
-                    SafeTrace(trace, "Could not obtain the iOS executable handle for __Internal imports from " +
+                    SafeTrace(trace, "Could not obtain the iOS executable handle for linked imports from " +
                         (assembly?.GetName().Name ?? "an unknown assembly") + ".");
                     return IntPtr.Zero;
                 }
 
-                SafeTrace(trace, "Resolved __Internal native imports from " +
+                SafeTrace(trace, "Resolved linked native imports from " +
                     (assembly?.GetName().Name ?? "an unknown assembly") + " against the app executable.");
                 return mainProgram;
             }
             catch (Exception exception)
             {
-                SafeTrace(trace, "Could not resolve __Internal imports from " +
+                SafeTrace(trace, "Could not resolve linked native imports from " +
                     (assembly?.GetName().Name ?? "an unknown assembly") + " against the app executable: " + exception);
                 return IntPtr.Zero;
             }

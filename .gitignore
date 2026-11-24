@@ -8,6 +8,7 @@ celeste/
 /celestemeow/*.dll
 /celestemeow/*.exe
 /work/
+__pycache__/
 /everest-runtime/
 /ios-native-imports.txt
 /ios-native-exports.txt

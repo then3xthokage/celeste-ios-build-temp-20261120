@@ -30,6 +30,7 @@
     <ProjectReference Include="ChroniaHelperFixture/ChroniaHelperFixture.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="BundledResolverFixture/BundledResolverFixture.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="EverestResolverFixture/EverestResolverFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="NativePInvokeFixture/NativePInvokeFixture.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="WovenInfrastructureProbe/WovenInfrastructureProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="../../Everest/Celeste.Mod.mm/Celeste.Mod.mm.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>

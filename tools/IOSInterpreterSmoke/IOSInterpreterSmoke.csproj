@@ -39,6 +39,7 @@
       <Private>true</Private>
     </Reference>
     <ProjectReference Include="ProbeFixture/ProbeFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../IOSHookWeaver.SmokeTests/NativePInvokeFixture/NativePInvokeFixture.csproj" ReferenceOutputAssembly="false" />
     <Compile Include="AppDelegate.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="RuntimeProbe.cs" />
@@ -46,6 +47,8 @@
     <Compile Include="../../celestemeow/IOSHookIdentity.cs" Link="IOSHookIdentity.cs" />
     <Compile Include="../../celestemeow/IOSHookRuntime.cs" Link="IOSHookRuntime.cs" />
     <Compile Include="../../celestemeow/IOSILHookRuntime.cs" Link="IOSILHookRuntime.cs" />
+    <Compile Include="../../celestemeow/IOSRuntimeAssemblyResolver.cs" Link="IOSRuntimeAssemblyResolver.cs" />
     <EmbeddedResource Include="ProbeFixture/bin/$(Configuration)/net8.0/ProbeFixture.dll" LogicalName="ProbeFixture.dll" />
+    <EmbeddedResource Include="../IOSHookWeaver.SmokeTests/NativePInvokeFixture/bin/$(Configuration)/net8.0/NativePInvokeFixture.dll" LogicalName="NativePInvokeFixture.dll" />
   </ItemGroup>
 </Project>

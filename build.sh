@@ -235,7 +235,7 @@ if [ -n "${ILSPYCMD_DLL:-}" ]; then
 fi
 if ! command -v ilspycmd &>/dev/null; then
 	info "ilspycmd is not installed, attempting to install it using dotnet"
-	if ! dotnet tool install --global ilspycmd --version 8.0.0.7246-preview3; then error "failed to install ilspycmd, please try installing it manually"; exit 1; fi
+	if ! dotnet tool install --global ilspycmd --version 11.2.0.10050; then error "failed to install ilspycmd, please try installing it manually"; exit 1; fi
 
 	if ! command -v ilspycmd &>/dev/null; then error "failed to invoke ilspycmd after installing, make sure it installed correctly"; exit 1; fi
 fi
@@ -340,7 +340,7 @@ dynamic_counts = {name: 0 for names in ios_dynamic_imports.values() for name in 
 def keep_unavailable_imports_dynamic(source, fallback_libraries):
     pattern = re.compile(
         r'(?P<prefix>\[\s*DllImport\s*\(\s*)'
-        r'(?P<library>"__Internal"|nativeLibName)'
+        r'(?P<library>"__Internal"|"celeste-ios-native"|nativeLibName)'
         r'(?P<arguments>[^\]]*\])'
         r'(?P<declaration>[^;{}]*?\b(?P<method>[A-Za-z_]\w*)\s*\()',
         re.S,
@@ -368,8 +368,8 @@ for path in root.rglob("*.cs"):
         import_pattern = re.compile(
             r'(\[\s*(?:DllImport|LibraryImport)\s*\(\s*)"' + literal + r'"'
         )
-        updated, const_count = const_pattern.subn(r'\1"__Internal"', updated)
-        updated, import_count = import_pattern.subn(r'\1"__Internal"', updated)
+        updated, const_count = const_pattern.subn(r'\1"celeste-ios-native"', updated)
+        updated, import_count = import_pattern.subn(r'\1"celeste-ios-native"', updated)
         counts[library] += const_count + import_count
     updated = keep_unavailable_imports_dynamic(
         updated,
@@ -447,7 +447,7 @@ fmod_dynamic_counts = {"FMOD_DSP_GetCPUUsage": 0}
 def keep_unavailable_imports_dynamic(source, fallback_libraries):
     pattern = re.compile(
         r'(?P<prefix>\[\s*DllImport\s*\(\s*)'
-        r'(?P<library>"__Internal"|nativeLibName)'
+        r'(?P<library>"__Internal"|"celeste-ios-native"|nativeLibName)'
         r'(?P<arguments>[^\]]*\])'
         r'(?P<declaration>[^;{}]*?\b(?P<method>[A-Za-z_]\w*)\s*\()',
         re.S,
@@ -471,7 +471,7 @@ for path in root.rglob("*.cs"):
         pattern = re.compile(
             r'(\[\s*DllImport\s*\(\s*)"' + re.escape(library) + r'"'
         )
-        updated, count = pattern.subn(r'\1"__Internal"', updated)
+        updated, count = pattern.subn(r'\1"celeste-ios-native"', updated)
         fmod_counts[library] += count
     updated = keep_unavailable_imports_dynamic(updated, {"FMOD_DSP_GetCPUUsage": "fmod"})
     if updated != source:
@@ -809,7 +809,7 @@ info "collecting linked native imports from runtime-loaded managed assemblies"
 native_import_manifest="$script_dir/ios-native-imports.txt"
 managed_native_assemblies=( "$script_dir/celeste/"*.dll "$everest_runtime"/*.dll )
 if ! dotnet run --project "$script_dir/tools/IOSNativeImportPatcher/IOSNativeImportPatcher.csproj" \
-	--configuration Release -- --write-internal-imports "$native_import_manifest" "${managed_native_assemblies[@]}"; then
+	--configuration Release -- --write-ios-native-imports "$native_import_manifest" "${managed_native_assemblies[@]}"; then
 	error "failed to collect linked native imports from runtime assemblies"
 	exit 1
 fi

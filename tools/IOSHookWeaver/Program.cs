@@ -20,11 +20,16 @@ public static class IOSHookWeaver
     private const string TypedDispatchKey = "Celeste.IOSHookRuntime.DispatchTyped";
     private static readonly Dictionary<string, string> IOSStaticLibraries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
-        ["SDL2"] = "__Internal",
-        ["FNA3D"] = "__Internal",
-        ["FAudio"] = "__Internal",
-        ["libtheorafile"] = "__Internal",
-        ["theorafilebun"] = "__Internal"
+        ["SDL2"] = "celeste-ios-native",
+        ["FNA3D"] = "celeste-ios-native",
+        ["FAudio"] = "celeste-ios-native",
+        ["libtheorafile"] = "celeste-ios-native",
+        ["theorafilebun"] = "celeste-ios-native",
+        ["__Internal"] = "celeste-ios-native",
+        ["libfmod"] = "celeste-ios-native",
+        ["libfmodstudio"] = "celeste-ios-native",
+        ["fmod"] = "celeste-ios-native",
+        ["fmodstudio"] = "celeste-ios-native"
     };
     private static readonly ConcurrentDictionary<ReflectionGetterKey, Delegate> ReflectionGetters = new ConcurrentDictionary<ReflectionGetterKey, Delegate>();
 
