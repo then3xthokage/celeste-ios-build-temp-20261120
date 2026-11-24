@@ -16,12 +16,15 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
-    <ProjectReference Include="../../Everest/external/MonoMod/src/MonoMod.Utils/MonoMod.Utils.csproj" />
     <!--
       The desktop smoke step builds Everest first. Reference its managed runtime
       output directly here so the iOS app does not pull Everest's desktop-only
       executable build tools into the iOS project graph.
     -->
+    <Reference Include="MonoMod.Utils">
+      <HintPath>../../Everest/Celeste.Mod.mm/bin/Release/net8.0/MonoMod.Utils.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
     <Reference Include="Celeste.Mod.mm">
       <HintPath>../../Everest/Celeste.Mod.mm/bin/Release/net8.0/Celeste.Mod.mm.dll</HintPath>
       <Private>true</Private>
