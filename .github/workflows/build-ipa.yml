@@ -369,9 +369,16 @@ jobs:
           fna_revision="$(git -C FNA rev-parse HEAD)"
           native_input_hash="${{ hashFiles('build.sh', 'patches/FAudio-static-alignment.patch', 'patches/SDL-gamecontroller.patch', 'patches/FNA-FNA3D-renderer.patch', 'patches/fnalibs-ios-disable-opengl.patch', 'patches/Theorafile-VidPlayer.patch', 'fnalibs-ios-builder-celeste/buildlibs.sh', 'fnalibs-ios-builder-celeste/updatelibs.sh') }}"
           cache_key="celeste-ios-native-controller-only-v2-fna-24.01-$builder_revision-$fna_revision-$native_input_hash"
+          legacy_cache_key=""
+          # This exact managed-game rebuild changes no native inputs. Reuse the
+          # last successful native cache once, then the new key is saved below.
+          if [[ "$native_input_hash" == "f1388c0418f745a8fe5eadeccd8141450e89bdcb9c902e4615da2932f7ff8468" ]]; then
+            legacy_cache_key="celeste-ios-native-controller-only-v2-fna-24.01-$builder_revision-$fna_revision-84927a069a4dfc7c59bf6e44dda42ff5eebe74f6aea881f6205fa9c75e7349b7"
+          fi
           echo "builder=$builder_revision" >> "$GITHUB_OUTPUT"
           echo "fna=$fna_revision" >> "$GITHUB_OUTPUT"
           echo "cache_key=$cache_key" >> "$GITHUB_OUTPUT"
+          echo "legacy_cache_key=$legacy_cache_key" >> "$GITHUB_OUTPUT"
 
       - name: Restore compiled iOS native libraries
         id: native-cache
@@ -379,6 +386,7 @@ jobs:
         with:
           path: fnalibs-ios-builder-celeste/release/ios/device
           key: ${{ steps.native-revisions.outputs.cache_key }}
+          restore-keys: ${{ steps.native-revisions.outputs.legacy_cache_key }}
 
       - name: Check cached native libraries
         id: native-libraries
