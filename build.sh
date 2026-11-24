@@ -226,6 +226,13 @@ info "checking for required tools..."
 if ! command -v git &>/dev/null; then missing_tool git "please install Xcode."; fi
 if ! command -v dotnet &>/dev/null; then missing_tool dotnet "install Visual Studio for Mac and make sure the Xamarin.iOS and .NET workloads are selected"; fi
 export PATH="$PATH:$HOME/.dotnet/tools"
+if [ -n "${ILSPYCMD_DLL:-}" ]; then
+	if ! [ -s "$ILSPYCMD_DLL" ]; then
+		error "the preloaded ilspycmd assembly was not found"
+		exit 1
+	fi
+	ilspycmd() { dotnet "$ILSPYCMD_DLL" "$@"; }
+fi
 if ! command -v ilspycmd &>/dev/null; then
 	info "ilspycmd is not installed, attempting to install it using dotnet"
 	if ! dotnet tool install --global ilspycmd --version 8.0.0.7246-preview3; then error "failed to install ilspycmd, please try installing it manually"; exit 1; fi
@@ -800,7 +807,7 @@ done
 
 info "collecting linked native imports from runtime-loaded managed assemblies"
 native_import_manifest="$script_dir/ios-native-imports.txt"
-managed_native_assemblies=( "$script_dir/celeste/Celeste.dll" "$script_dir/celeste/FNA.dll" "$everest_runtime"/*.dll )
+managed_native_assemblies=( "$script_dir/celeste/"*.dll "$everest_runtime"/*.dll )
 if ! dotnet run --project "$script_dir/tools/IOSNativeImportPatcher/IOSNativeImportPatcher.csproj" \
 	--configuration Release -- --write-internal-imports "$native_import_manifest" "${managed_native_assemblies[@]}"; then
 	error "failed to collect linked native imports from runtime assemblies"

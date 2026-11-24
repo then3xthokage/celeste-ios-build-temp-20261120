@@ -57,6 +57,27 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: dotnet run --configuration Release --project "$GITHUB_WORKSPACE/tools/IOSModLibrarySmoke/IOSModLibrarySmoke.csproj"
 
+      - name: Prepare portable ILSpy CLI for the macOS build
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool_dir="$RUNNER_TEMP/ilspycmd-tools"
+          mkdir -p "$tool_dir"
+          dotnet tool install --tool-path "$tool_dir" ilspycmd --version 8.0.0.7246-preview3
+          tool_dll="$(find "$tool_dir/.store" -type f -iname 'ilspycmd.dll' -print -quit)"
+          if [ -z "$tool_dll" ]; then
+            echo "The portable ILSpy command assembly was not installed." >&2
+            exit 1
+          fi
+          tar -czf "$RUNNER_TEMP/ilspycmd-portable.tar.gz" -C "$tool_dir" .store
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: celeste-ios-ilspycmd
+          path: ${{ runner.temp }}/ilspycmd-portable.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Package tested managed runtime for simulator smoke
         run: |
           set -euo pipefail
@@ -99,6 +120,24 @@ jobs:
         with:
           name: celeste-ios-managed-smoke
           path: ${{ runner.temp }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: celeste-ios-ilspycmd
+          path: ${{ runner.temp }}/ilspycmd-portable
+
+      - name: Restore portable ILSpy CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          portable_dir="$RUNNER_TEMP/ilspycmd-portable"
+          tar -xzf "$portable_dir/ilspycmd-portable.tar.gz" -C "$portable_dir"
+          tool_dll="$(find "$portable_dir/.store" -type f -iname 'ilspycmd.dll' -print -quit)"
+          if [ -z "$tool_dll" ]; then
+            echo "The portable ILSpy command assembly was not restored." >&2
+            exit 1
+          fi
+          echo "ILSPYCMD_DLL=$tool_dll" >> "$GITHUB_ENV"
 
       - name: Restore tested managed runtime for simulator smoke
         run: tar -xzf "$RUNNER_TEMP/everest-managed-smoke.tar.gz" -C "$GITHUB_WORKSPACE"
