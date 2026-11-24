@@ -369,19 +369,21 @@ namespace celestemeow
 
             Assembly gameAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(gameAssemblyPath);
             Type celesteType = gameAssembly.GetType("Celeste.Celeste", throwOnError: true);
-
-            // thanks to pixel#0772 on the celeste discord server for this <3
-            //Type MeWhenIStealCodeFromAScreenshotInTheCelesteDiscordServer = typeof(UIWindow).GetType();
-            MethodInfo method = celesteType.GetMethod("Main", BindingFlags.NonPublic | BindingFlags.Static);
-            if (method == null)
+            MethodInfo method = celesteType.GetMethod(
+                "Main",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
+                binder: null,
+                types: new[] { typeof(string[]) },
+                modifiers: null);
+            if (method == null || method.ReturnType != typeof(void) || !method.IsStatic)
             {
-                TraceStartup("Celeste.Main reflection lookup failed");
-                throw new MissingMethodException("Could not find Celeste.Celeste.Main");
+                TraceStartup("Celeste.Main(string[]) reflection lookup failed");
+                throw new MissingMethodException("Could not find static void Celeste.Celeste.Main(string[]).");
             }
 
-            TraceStartup("invoking Celeste.Main");
+            TraceStartup("invoking patched Celeste.Main");
             method.Invoke(null, new object[] { args });
-            TraceStartup("Celeste.Main returned");
+            TraceStartup("patched Celeste.Main returned");
         }
     }
 }

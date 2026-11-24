@@ -602,6 +602,13 @@ for assembly in "$everest_runtime"/*.dll; do
 	fi
 done
 
+info "verifying the patched Celeste launch method for the iOS launcher"
+if ! dotnet run --project "$script_dir/tools/IOSHookWeaver/IOSHookWeaver.csproj" \
+	--configuration Release -- --verify-celeste-main "$script_dir/celeste/Celeste.dll"; then
+	error "patched Celeste assembly does not contain the launch method used by the iOS app"
+	exit 1
+fi
+
 info "checking that the patched Celeste assembly is portable to iOS arm64"
 python3 - "$script_dir/celeste/Celeste.dll" <<'PY'
 import pathlib

@@ -184,9 +184,22 @@ public static class IOSHookWeaver
 #if !__IOS__
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && string.Equals(args[0], "--verify-celeste-main", StringComparison.Ordinal))
+        {
+            try
+            {
+                return VerifyCelesteLaunchMethod(args[1]);
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine("Celeste entry-point verification failed: " + exception.Message);
+                return 1;
+            }
+        }
+
         if (args.Length < 2)
         {
-            Console.Error.WriteLine("Usage: IOSHookWeaver <input-assembly> <output-assembly> [resolver-directory ...]");
+            Console.Error.WriteLine("Usage: IOSHookWeaver <input-assembly> <output-assembly> [resolver-directory ...] | --verify-celeste-main <assembly>");
             return 2;
         }
 
@@ -209,6 +222,33 @@ public static class IOSHookWeaver
             Console.WriteLine("Skipped " + skipped.Length + " methods that remain unhookable on this iOS backend:");
             foreach (string method in skipped) Console.WriteLine("  " + method);
         }
+        return 0;
+    }
+
+    private static int VerifyCelesteLaunchMethod(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath)) throw new FileNotFoundException("Patched Celeste assembly was not found.", fullPath);
+
+        using (AssemblyDefinition assembly = AssemblyDefinition.ReadAssembly(fullPath, new ReaderParameters
+        {
+            InMemory = true,
+            ReadingMode = ReadingMode.Deferred,
+            ReadSymbols = false
+        }))
+        {
+            TypeDefinition celesteType = assembly.MainModule.GetType("Celeste.Celeste");
+            MethodDefinition main = celesteType?.Methods.FirstOrDefault(method =>
+                string.Equals(method.Name, "Main", StringComparison.Ordinal) && method.IsStatic &&
+                string.Equals(method.ReturnType.FullName, "System.Void", StringComparison.Ordinal) &&
+                method.Parameters.Count == 1 &&
+                string.Equals(method.Parameters[0].ParameterType.FullName, "System.String[]", StringComparison.Ordinal));
+            if (main == null || !main.HasBody || main.Body.Instructions.Count == 0)
+                throw new InvalidDataException("The patched assembly does not contain static void Celeste.Celeste.Main(string[]) with a method body.");
+
+            Console.WriteLine("Verified iOS game launch method: " + main.FullName + ".");
+        }
+
         return 0;
     }
 #endif
