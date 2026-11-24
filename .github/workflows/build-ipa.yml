@@ -347,8 +347,8 @@ jobs:
           # runner needlessly doubles compilation memory.
           smoke_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/IOSInterpreterSmoke.csproj"
           fixture_project="$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/ProbeFixture/ProbeFixture.csproj"
-          dotnet build "$fixture_project" --configuration Release
-          dotnet build "$smoke_project" --configuration Release -r "$IOS_SIMULATOR_RID"
+          dotnet build "$fixture_project" --configuration Release -m:1 -p:BuildInParallel=false -p:UseSharedCompilation=false
+          dotnet build "$smoke_project" --configuration Release -r "$IOS_SIMULATOR_RID" -m:1 -p:BuildInParallel=false -p:UseSharedCompilation=false -p:BuildProjectReferences=false
           app_path="$(find "$GITHUB_WORKSPACE/tools/IOSInterpreterSmoke/bin/Release/net11.0-ios" -maxdepth 3 -type d -name 'IOSInterpreterSmoke.app' -print -quit)"
           if [ -z "$app_path" ]; then
             echo 'The iOS interpreter smoke app bundle was not produced.' >&2
