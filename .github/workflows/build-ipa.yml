@@ -315,6 +315,7 @@ jobs:
         working-directory: ${{ runner.temp }}
         shell: bash
         timeout-minutes: 20
+        continue-on-error: true
         run: |
           set -euo pipefail
           run_with_timeout() {
