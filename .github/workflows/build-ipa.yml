@@ -64,7 +64,9 @@ jobs:
           set -euo pipefail
           tool_dir="$RUNNER_TEMP/ilspycmd-tools"
           mkdir -p "$tool_dir"
-          dotnet tool install --tool-path "$tool_dir" ilspycmd --version 11.2.0.10050
+          # The Linux x64 `ilspycmd` pointer now selects a Native AOT package.
+          # The macOS build job needs the framework-dependent, portable tool payload.
+          dotnet tool install --tool-path "$tool_dir" ilspycmd.any --version 11.2.0.10050
           tool_dll="$(find "$tool_dir/.store" -type f -iname 'ilspycmd.dll' -print -quit)"
           if [ -z "$tool_dll" ]; then
             echo "The portable ILSpy command assembly was not installed." >&2
