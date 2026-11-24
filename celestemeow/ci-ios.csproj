@@ -84,7 +84,7 @@
 
   <ItemGroup>
     <LinkerArgument Include="-lc++" />
-    <!-- Runtime-loaded FNA/Celeste assemblies resolve __Internal imports by executable handle. -->
-    <LinkerArgument Include="-Wl,-export_dynamic" />
+    <!-- Publish the symbols needed by runtime-loaded Celeste, FNA, and Everest code. -->
+    <LinkerArgument Include="-Wl,-exported_symbols_list,$(IOSNativeExportsList)" Condition="'$(IOSNativeExportsList)' != ''" />
   </ItemGroup>
 </Project>

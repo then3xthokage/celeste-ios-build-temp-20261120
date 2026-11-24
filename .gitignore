@@ -9,6 +9,8 @@ celeste/
 /celestemeow/*.exe
 /work/
 /everest-runtime/
+/ios-native-imports.txt
+/ios-native-exports.txt
 /tools/**/bin/
 /tools/**/obj/
 /.DS_Store

@@ -472,7 +472,9 @@ jobs:
         with:
           path: fnalibs-ios-builder-celeste/release/ios/device
           key: ${{ steps.native-revisions.outputs.cache_key }}
-          restore-keys: ${{ steps.native-revisions.outputs.legacy_cache_key }}
+          restore-keys: |
+            ${{ steps.native-revisions.outputs.legacy_cache_key }}
+            celeste-ios-native-controller-only-v2-fna-24.01-${{ steps.native-revisions.outputs.builder }}-${{ steps.native-revisions.outputs.fna }}-
 
       - name: Check cached native libraries
         id: native-libraries
@@ -618,5 +620,7 @@ jobs:
             "$RUNNER_TEMP/celeste-fmod-ios.tar.gz" \
             "$RUNNER_TEMP/celeste-private-overrides.tar.gz" \
             "$GITHUB_WORKSPACE/celestemeow.ipa" \
+            "$GITHUB_WORKSPACE/ios-native-imports.txt" \
+            "$GITHUB_WORKSPACE/ios-native-exports.txt" \
             "$GITHUB_WORKSPACE/patches/remove-steam.patch" \
             "$GITHUB_WORKSPACE/patches/remove-steam2.patch"

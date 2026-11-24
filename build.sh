@@ -814,12 +814,45 @@ if ! dotnet run --project "$script_dir/tools/IOSNativeImportPatcher/IOSNativeImp
 	exit 1
 fi
 
+info "generating the native export list for runtime-loaded Celeste, FNA, and Everest code"
+native_export_manifest="$script_dir/ios-native-exports.txt"
+if ! cp "$native_import_manifest" "$native_export_manifest" || \
+	! printf '%s\n' "_SDL_iPhoneSetEventPump" >> "$native_export_manifest"; then
+	error "failed to initialize the native export list"
+	exit 1
+fi
+native_archives=(
+	"$script_dir/celestemeow/libSDL2.a"
+	"$script_dir/celestemeow/libFNA3D.a"
+	"$script_dir/celestemeow/libFAudio.a"
+	"$script_dir/celestemeow/libtheorafile.a"
+	"$script_dir/celestemeow/libMoltenVK.a"
+	"$script_dir/celestemeow/libfmod.a"
+	"$script_dir/celestemeow/libfmodstudio.a"
+)
+for archive in "${native_archives[@]}"; do
+	if ! [ -s "$archive" ]; then
+		error "native archive for export collection is missing: $archive"
+		exit 1
+	fi
+	if ! (set -o pipefail; nm -gU "$archive" | awk 'NF >= 3 && $NF ~ /^_/ { print $NF }' >> "$native_export_manifest"); then
+		error "failed to collect global native exports from $(basename "$archive")"
+		exit 1
+	fi
+done
+if ! LC_ALL=C sort -u "$native_export_manifest" -o "$native_export_manifest" || ! [ -s "$native_export_manifest" ]; then
+	error "failed to finalize the native export list"
+	exit 1
+fi
+info "collected $(wc -l < "$native_export_manifest" | tr -d ' ') native symbols for the iOS executable export list"
+
 if ! dotnet publish "$script_dir/celestemeow/ci-ios.csproj" \
 	--configuration Release \
 	--runtime ios-arm64 \
 	-p:EnableCodeSigning=false \
 	-p:BuildIpa=true \
-	-p:ValidateXcodeVersion=false; then
+	-p:ValidateXcodeVersion=false \
+	-p:IOSNativeExportsList="$native_export_manifest"; then
 	error "failed to build ios project"
 	exit 1
 fi
@@ -830,8 +863,8 @@ if [ -z "$ipa_path" ]; then
 	error "the iOS app package was not generated"
 	exit 1
 fi
-if ! python3 "$script_dir/tools/verify-ios-native-exports.py" "$ipa_path" --native-imports "$native_import_manifest"; then
-	error "the packaged iOS app does not export every native symbol required by the bundled runtime and audited code mods"
+if ! python3 "$script_dir/tools/verify-ios-native-exports.py" "$ipa_path" --native-imports "$native_export_manifest"; then
+	error "the packaged iOS app does not export every required runtime import and linked native library symbol"
 	exit 1
 fi
 if ! mv "$ipa_path" "$script_dir/celestemeow.ipa"; then error "failed to move ipa"; exit 1; fi

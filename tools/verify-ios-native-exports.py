@@ -13,6 +13,7 @@ REQUIRED_SYMBOLS = (
     "_SDL_SetHint",
     "_SDL_UIKitRunApp",
     "_SDL_ShowSimpleMessageBox",
+    "_SDL_iPhoneSetEventPump",
     "_SDL_GetPlatform",
     "_tf_gettheorasize",
     "_tf_granpos_dec",
@@ -163,7 +164,7 @@ def main():
     parser.add_argument("binary_or_ipa", help="arm64 app executable or IPA archive")
     parser.add_argument(
         "--native-imports",
-        help="text file listing __Internal P/Invoke entry points required by bundled managed assemblies",
+        help="text file listing required native exports from runtime P/Invokes and linked libraries",
     )
     arguments = parser.parse_args()
     try:
