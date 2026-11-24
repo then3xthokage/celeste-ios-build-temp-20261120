@@ -25,6 +25,14 @@
       <HintPath>../../Everest/Celeste.Mod.mm/bin/Release/net8.0/MonoMod.Utils.dll</HintPath>
       <Private>true</Private>
     </Reference>
+    <Reference Include="MonoMod.Backports">
+      <HintPath>../../Everest/Celeste.Mod.mm/bin/Release/net8.0/MonoMod.Backports.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="MonoMod.ILHelpers">
+      <HintPath>../../Everest/Celeste.Mod.mm/bin/Release/net8.0/MonoMod.ILHelpers.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
     <Reference Include="Celeste.Mod.mm">
       <HintPath>../../Everest/Celeste.Mod.mm/bin/Release/net8.0/Celeste.Mod.mm.dll</HintPath>
       <Private>true</Private>

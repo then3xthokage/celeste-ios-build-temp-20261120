@@ -88,6 +88,16 @@ jobs:
           test -s Everest/Celeste.Mod.mm/bin/Release/net8.0/MonoMod.RuntimeDetour.dll
           test -s Everest/Celeste.Mod.mm/bin/Release/net8.0/MonoMod.Utils.dll
           test -s Everest/external/NLua/lib/Release/net8.0/NLua.dll
+          nuget_global_packages="$(dotnet nuget locals global-packages --list | sed -n 's/^global-packages: //p' | tr -d '\r')"
+          for package_assembly in \
+            monomod.backports/1.1.2/lib/net8.0/MonoMod.Backports.dll \
+            monomod.ilhelpers/1.1.0/lib/net8.0/MonoMod.ILHelpers.dll; do
+            if [ -z "$nuget_global_packages" ] || [ ! -s "$nuget_global_packages/$package_assembly" ]; then
+              echo "The iOS runtime smoke dependency is missing from the NuGet cache: $package_assembly" >&2
+              exit 1
+            fi
+            cp -f "$nuget_global_packages/$package_assembly" Everest/Celeste.Mod.mm/bin/Release/net8.0/
+          done
           tar -czf "$RUNNER_TEMP/everest-managed-smoke.tar.gz" \
             Everest/Celeste.Mod.mm/bin/Release/net8.0/*.dll \
             Everest/external/NLua/lib/Release/net8.0/NLua.dll

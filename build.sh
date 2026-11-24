@@ -527,7 +527,18 @@ if ! dotnet publish "$script_dir/Everest/Celeste.Mod.mm/Celeste.Mod.mm.csproj" \
 fi
 cd "$script_dir" || cd_fail
 
-for required in Celeste.Mod.mm.dll MonoMod.Patcher.dll MonoMod.RuntimeDetour.HookGen.dll MonoMod.RuntimeDetour.dll MonoMod.Utils.dll Mono.Cecil.dll NLua.dll KeraLua.dll; do
+nuget_global_packages="$(dotnet nuget locals global-packages --list | sed -n 's/^global-packages: //p' | tr -d '\r')"
+for package_assembly in \
+	monomod.backports/1.1.2/lib/net8.0/MonoMod.Backports.dll \
+	monomod.ilhelpers/1.1.0/lib/net8.0/MonoMod.ILHelpers.dll; do
+	if ! [ -s "$nuget_global_packages/$package_assembly" ]; then
+		error "Everest runtime package dependency is missing: $package_assembly"
+		exit 1
+	fi
+	copy_game_files "$nuget_global_packages/$package_assembly" "$everest_runtime/"
+done
+
+for required in Celeste.Mod.mm.dll MonoMod.Patcher.dll MonoMod.RuntimeDetour.HookGen.dll MonoMod.RuntimeDetour.dll MonoMod.Utils.dll MonoMod.Backports.dll MonoMod.ILHelpers.dll Mono.Cecil.dll NLua.dll KeraLua.dll; do
 	if ! [ -s "$everest_runtime/$required" ]; then
 		error "Everest runtime is missing required assembly $required"
 		exit 1
