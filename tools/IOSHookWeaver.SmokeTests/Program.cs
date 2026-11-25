@@ -25,6 +25,7 @@ internal static class Program
         VerifyLinkedNativeImportResolution();
         VerifyIOSSDLHostBoundary();
         VerifyLauncherProjectBoundary();
+        VerifyBuildIdentityReadback();
         VerifyBundledRuntimeAssemblyResolver();
         VerifyDependencyResolver();
         string projectDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
@@ -463,14 +464,47 @@ internal static class Program
         }
 
         XElement[] bundleResources = appProject.Descendants("BundleResource").ToArray();
+        AssertBundleResource(bundleResources, "BuildInfo.txt", "BuildInfo.txt");
         AssertBundleResource(bundleResources, "RuntimeAssemblies/Celeste.dll", "Celeste.dll");
         AssertBundleResource(bundleResources, "RuntimeAssemblies/FNA.dll", "RuntimeAssemblies/FNA.dll");
 
         string mainSource = File.ReadAllText(Path.Combine(repositoryDirectory, "celestemeow", "Main.cs"));
         if (mainSource.Contains("SDL2.SDL.", StringComparison.Ordinal) || mainSource.Contains("using SDL2;", StringComparison.Ordinal))
             throw new InvalidOperationException("The launcher must not reference SDL through FNA before Celeste loads.");
+        if (!mainSource.Contains("build identity: ", StringComparison.Ordinal) ||
+            !mainSource.Contains("IOSBuildIdentity.Read(appBundleDirectory)", StringComparison.Ordinal))
+            throw new InvalidOperationException("Startup diagnostics must report the build identity bundled in the app.");
 
-        Console.WriteLine("PASS launcher project keeps Celeste and FNA dynamic and bundles their runtime files at resolver paths.");
+        string buildScript = File.ReadAllText(Path.Combine(repositoryDirectory, "build.sh"));
+        if (!buildScript.Contains("GITHUB_SHA", StringComparison.Ordinal) ||
+            !buildScript.Contains("GITHUB_RUN_ID", StringComparison.Ordinal) ||
+            !buildScript.Contains("The packaged app build identity does not match the source build.", StringComparison.Ordinal))
+            throw new InvalidOperationException("The IPA build must stamp and verify the commit and Actions run identity.");
+
+        Console.WriteLine("PASS launcher bundles runtime files at resolver paths and stamps a verified CI build identity.");
+    }
+
+    private static void VerifyBuildIdentityReadback()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "CelesteIOSBuildInfoSmoke-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "BuildInfo.txt"), "commit=abc123\nrun=456789\n");
+            string identity = IOSBuildIdentity.Read(directory);
+            if (!string.Equals(identity, "commit=abc123, run=456789", StringComparison.Ordinal))
+                throw new InvalidOperationException("The launcher did not read and flatten the bundled build identity correctly.");
+
+            string missing = IOSBuildIdentity.Read(Path.Combine(directory, "missing"));
+            if (!string.Equals(missing, "unavailable", StringComparison.Ordinal))
+                throw new InvalidOperationException("Missing build identity metadata must not prevent startup.");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+
+        Console.WriteLine("PASS bundled build identity is logged, and missing metadata cannot block launch.");
     }
 
     private static void AssertBundleResource(IEnumerable<XElement> resources, string include, string link)

@@ -875,6 +875,14 @@ if ! cp "$native_import_manifest" "$native_export_manifest" || \
 fi
 info "collected $(wc -l < "$native_export_manifest" | tr -d ' ') arm64 native symbols for the iOS executable export list"
 
+build_info_path="$script_dir/celestemeow/BuildInfo.txt"
+build_commit="${GITHUB_SHA:-$(git -C "$script_dir" rev-parse HEAD 2>/dev/null || printf 'local')}"
+build_run_id="${GITHUB_RUN_ID:-local}"
+if ! printf 'commit=%s\nrun=%s\n' "$build_commit" "$build_run_id" > "$build_info_path"; then
+	error "failed to write the iOS build identity"
+	exit 1
+fi
+
 if ! dotnet publish "$script_dir/celestemeow/ci-ios.csproj" \
 	--configuration Release \
 	--runtime ios-arm64 \
@@ -895,16 +903,26 @@ fi
 
 info "verifying Celeste.dll inside the finished IPA"
 packaged_celeste="$script_dir/celeste/IPA-Celeste.dll"
-if ! python3 - "$ipa_path" "$packaged_celeste" <<'PY'
+if ! python3 - "$ipa_path" "$packaged_celeste" "$build_info_path" <<'PY'
 import sys
 import zipfile
 
-ipa_path, output_path = sys.argv[1:]
+ipa_path, output_path, expected_info_path = sys.argv[1:]
 with zipfile.ZipFile(ipa_path) as ipa:
     matches = [name for name in ipa.namelist()
                if ".app/" in name and name.endswith("/Celeste.dll")]
     if len(matches) != 1:
         raise SystemExit(f"Expected exactly one Celeste.dll in the packaged app; found {len(matches)}: {matches}")
+    info_matches = [name for name in ipa.namelist()
+                    if ".app/" in name and name.endswith("/BuildInfo.txt")]
+    if len(info_matches) != 1:
+        raise SystemExit(f"Expected exactly one BuildInfo.txt in the packaged app; found {len(info_matches)}: {info_matches}")
+    with open(expected_info_path, "rb") as expected_file:
+        expected_info = expected_file.read().strip()
+    packaged_info = ipa.read(info_matches[0]).strip()
+    if packaged_info != expected_info:
+        raise SystemExit("The packaged app build identity does not match the source build.")
+    print("Verified packaged app build identity: " + packaged_info.decode("utf-8", errors="replace").replace("\n", ", "))
     with open(output_path, "wb") as output:
         output.write(ipa.read(matches[0]))
     print(f"Extracted packaged {matches[0]} for startup-path verification")

@@ -631,6 +631,7 @@ jobs:
             "$GITHUB_WORKSPACE/Everest/Celeste.Mod.mm/obj" \
             "$GITHUB_WORKSPACE/celestemeow/Content" \
             "$GITHUB_WORKSPACE/celestemeow/RuntimeAssemblies" \
+            "$GITHUB_WORKSPACE/celestemeow/BuildInfo.txt" \
             "$GITHUB_WORKSPACE/celestemeow/bin" \
             "$GITHUB_WORKSPACE/celestemeow/obj"
           rm -f \

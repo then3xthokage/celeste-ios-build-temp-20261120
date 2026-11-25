@@ -130,6 +130,7 @@ namespace celestemeow
                 appBundleDirectory = NSBundle.MainBundle.BundlePath;
                 if (string.IsNullOrWhiteSpace(appBundleDirectory))
                     appBundleDirectory = AppContext.BaseDirectory;
+                TraceStartup("build identity: " + IOSBuildIdentity.Read(appBundleDirectory));
 
                 IOSRuntimeAssemblyResolver.Attach(
                     AssemblyLoadContext.Default,

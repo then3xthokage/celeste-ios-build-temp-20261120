@@ -29,6 +29,7 @@
     <PackageReference Include="KeraLua" Version="1.4.7" />
     <ImageAsset Include="Assets.xcassets/**/*" />
     <BundleResource Include="Content/**/*" TargetPath="Content/%(RecursiveDir)%(Filename)%(Extension)" />
+    <BundleResource Include="BuildInfo.txt" Condition="Exists('BuildInfo.txt')" Link="BuildInfo.txt" />
     <BundleResource Include="RuntimeAssemblies/Celeste.dll" Link="Celeste.dll" />
     <BundleResource Include="RuntimeAssemblies/FNA.dll" Link="RuntimeAssemblies/FNA.dll" />
     <BundleResource Include="RuntimeAssemblies/Everest/*.dll" TargetPath="%(Filename)%(Extension)" />
