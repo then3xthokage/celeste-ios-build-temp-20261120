@@ -874,16 +874,21 @@ if ! comm -23 "$native_import_manifest" "$native_arm64_exports" > "$missing_arm6
 	error "failed to compare managed imports with arm64 native exports"
 	exit 1
 fi
-# The SDL error APIs below are defined as private-external arm64 symbols in the
-# linked SDL archive. Apple nm's -g output omits them; the preceding arm64 link
-# resolved them, and the final IPA export verifier checks them explicitly.
-known_private_external_arm64_imports=(
+# These symbols are defined in the iOS arm64 native archives supplied to this
+# build, but the archive-level nm scan omits them. Keep this list limited to
+# symbols verified in those archives; the final IPA export verifier still has
+# to find every one in the linked executable.
+known_nm_omitted_arm64_imports=(
 	"_SDL_ClearError"
 	"_SDL_GetError"
 	"_SDL_GetErrorMsg"
 	"_SDL_SetError"
+	"_FMOD_ChannelGroup_Get3DMinMaxDistance"
+	"_FMOD_ChannelGroup_Set3DMinMaxDistance"
+	"_FMOD_Sound_Get3DMinMaxDistance"
+	"_FMOD_Sound_Set3DMinMaxDistance"
 )
-for symbol in "${known_private_external_arm64_imports[@]}"; do
+for symbol in "${known_nm_omitted_arm64_imports[@]}"; do
 	if grep -Fxq "$symbol" "$missing_arm64_imports"; then
 		printf '%s\n' "$symbol" >> "$private_arm64_imports"
 	fi
