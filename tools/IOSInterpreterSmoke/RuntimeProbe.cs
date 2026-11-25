@@ -855,6 +855,51 @@ public static class RuntimeProbe
         Type generatedType = generated.CreateType();
         RuntimeEmitBase instance = (RuntimeEmitBase)Activator.CreateInstance(generatedType);
         AssertEqual("CoreCLR interpreted dynamic assembly override", 49, instance.Transform(42));
+
+        VerifyFrostHelperStyleConditionEmitter();
+    }
+
+    private static void VerifyFrostHelperStyleConditionEmitter()
+    {
+        // FrostHelper builds session-expression delegates through MonoMod's Cecil
+        // DMD backend. Exercise its key generated-body shape on the iOS runtime:
+        // method call, conditional branch, local storage, and arithmetic.
+        using DynamicMethodDefinition dmd = new DynamicMethodDefinition(
+            "ios_frosthelper_condition_emitter_smoke",
+            typeof(int),
+            new[] { typeof(SessionExpressionRuntimeProbe), typeof(int) });
+        ILGenerator il = dmd.GetILGenerator();
+        LocalBuilder result = il.DeclareLocal(typeof(int));
+        Label fallback = il.DefineLabel();
+        Label finished = il.DefineLabel();
+
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Ldstr, "unlocked");
+        il.Emit(OpCodes.Callvirt, typeof(SessionExpressionRuntimeProbe).GetMethod(
+            nameof(SessionExpressionRuntimeProbe.GetFlag)));
+        il.Emit(OpCodes.Brfalse, fallback);
+        il.Emit(OpCodes.Ldarg_1);
+        il.Emit(OpCodes.Ldc_I4_2);
+        il.Emit(OpCodes.Add);
+        il.Emit(OpCodes.Stloc, result);
+        il.Emit(OpCodes.Br, finished);
+
+        il.MarkLabel(fallback);
+        il.Emit(OpCodes.Ldarg_1);
+        il.Emit(OpCodes.Ldc_I4_3);
+        il.Emit(OpCodes.Mul);
+        il.Emit(OpCodes.Stloc, result);
+
+        il.MarkLabel(finished);
+        il.Emit(OpCodes.Ldloc, result);
+        il.Emit(OpCodes.Ret);
+
+        Func<SessionExpressionRuntimeProbe, int, int> evaluate =
+            dmd.Generate().CreateDelegate<Func<SessionExpressionRuntimeProbe, int, int>>();
+        AssertEqual("FrostHelper-style emitted condition true branch", 42,
+            evaluate(new SessionExpressionRuntimeProbe(true), 40));
+        AssertEqual("FrostHelper-style emitted condition false branch", 42,
+            evaluate(new SessionExpressionRuntimeProbe(false), 14));
     }
 
     private static void VerifyNLuaCodeGeneration(Assembly fixture)
@@ -911,4 +956,13 @@ public abstract class RuntimeEmitBase
 {
     protected RuntimeEmitBase() { }
     public abstract int Transform(int value);
+}
+
+public sealed class SessionExpressionRuntimeProbe
+{
+    private readonly bool unlocked;
+
+    public SessionExpressionRuntimeProbe(bool unlocked) => this.unlocked = unlocked;
+
+    public bool GetFlag(string name) => string.Equals(name, "unlocked", StringComparison.Ordinal) && unlocked;
 }

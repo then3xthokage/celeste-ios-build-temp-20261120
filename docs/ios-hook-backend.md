@@ -107,10 +107,13 @@ as skipped; those existing gates remain intact, and a repeat scan is not the
 compatibility measure. The smoke suite exercises the typed paths for
 by-reference returns, byref-like spans, pointers, and value-type instances.
 
-Mods that require desktop-only APIs, native libraries, `Reflection.Emit`, or
-another runtime-specific facility need an iOS implementation of that facility.
-That requirement comes from the mod itself and its dependencies, rather than
-the asset or map archive format.
+CoreCLR is built with `DynamicCodeSupport=true`, so managed `Reflection.Emit`
+is available and generated IL runs through the iOS interpreter. The simulator
+smoke exercises `DynamicMethod`, `TypeBuilder`, and a FrostHelper-style
+session-expression emitter with calls, branches, locals, and arithmetic.
+This verifies those runtime building blocks, not every emitted body in every
+mod. Native libraries, desktop-only APIs, and platform-specific runtime
+facilities still need compatible iOS implementations.
 
 ## Mod manager and controllers
 
@@ -160,9 +163,10 @@ Verification record (November 25, 2026):
   method compatibility. No package-specific dependency-resolution switch is
   used.
 
-The latest GitHub iOS build (run 45648499435) passed package and native-import
-verification. It has not been confirmed on a physical iPhone or iPad. Install
-and launch checks, controller play, and in-game checks with the seven audited
-campaign roots remain necessary before claiming device-level compatibility.
-Static checks cannot prove that every third-party code mod behaves correctly
-at runtime.
+GitHub iOS build 45689496980 (commit `3d69a1f2e2bdd13ac3ddffdf464ef03bd2fd977b`)
+passed the iOS interpreter hook smoke test, ARM64 package build, packaged
+`Celeste.Main` startup-path verification, build-identity check, and native export
+audit. It has not been confirmed on a physical iPhone or iPad. Install and launch
+checks, controller play, and in-game checks with the seven audited campaign roots
+remain necessary before claiming device-level compatibility. Static checks cannot
+prove that every third-party code mod behaves correctly at runtime.
