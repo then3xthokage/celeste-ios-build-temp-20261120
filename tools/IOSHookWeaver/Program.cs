@@ -256,8 +256,8 @@ public static class IOSHookWeaver
                 instruction.OpCode == OpCodes.Ldstr &&
                 string.Equals(instruction.Operand as string, "Celeste.IOSHookRuntime.EverestDataPath", StringComparison.Ordinal));
             int getData = FindMethodCallIndex(instructions, "System.AppDomain", "GetData", dataKey + 1);
-            int fullPath = FindMethodCallIndex(instructions, "System.IO.Path", "GetFullPath", getData + 1);
-            int createDirectory = FindMethodCallIndex(instructions, "System.IO.Directory", "CreateDirectory", fullPath + 1);
+            int fullPathCall = FindMethodCallIndex(instructions, "System.IO.Path", "GetFullPath", getData + 1);
+            int createDirectory = FindMethodCallIndex(instructions, "System.IO.Directory", "CreateDirectory", fullPathCall + 1);
             int getCurrentDirectory = FindMethodCallIndex(instructions, "System.Environment", "get_CurrentDirectory", createDirectory + 1);
             int setCurrentDirectory = FindMethodCallIndex(instructions, "System.Environment", "set_CurrentDirectory", getCurrentDirectory + 1);
             int buildFlag = Array.FindIndex(instructions, setCurrentDirectory + 1, instruction =>
@@ -266,7 +266,7 @@ public static class IOSHookWeaver
             int writeFlag = FindMethodCallIndex(instructions, "System.IO.File", "WriteAllText", buildFlag + 1);
             int nullGuard = FindMethodCallIndex(instructions, "System.String", "IsNullOrWhiteSpace", getData + 1);
 
-            if (dataKey < 0 || getData <= dataKey || fullPath <= getData || createDirectory <= fullPath ||
+            if (dataKey < 0 || getData <= dataKey || fullPathCall <= getData || createDirectory <= fullPathCall ||
                 getCurrentDirectory <= createDirectory || setCurrentDirectory <= getCurrentDirectory ||
                 nullGuard <= getData || nullGuard >= setCurrentDirectory || buildFlag <= setCurrentDirectory || writeFlag <= buildFlag)
                 throw new InvalidDataException(
