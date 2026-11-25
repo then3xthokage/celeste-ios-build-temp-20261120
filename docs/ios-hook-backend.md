@@ -3,13 +3,14 @@
 ## Runtime layout
 
 The app keeps Everest's existing mod-facing APIs and substitutes a managed
-backend underneath them. iOS builds the host and game ahead of time, then uses
-the Mono interpreter for downloaded managed mod assemblies and rewritten
-method bodies. Hooking never writes executable pages or emits native code.
-MonoMod's Cecil dynamic-method backend is selected at startup. The bundled
+backend underneath them. The device build targets .NET 11 iOS on CoreCLR. The
+runtime uses ReadyToRun methods where available and its interpreter for managed
+methods that are not precompiled, including downloaded mod assemblies and
+rewritten method bodies. Hooking never writes executable pages or emits native
+code. MonoMod's Cecil dynamic-method backend is selected at startup. The bundled
 `Mono.Cecil*.dll` and `MonoMod.Utils.dll` files remain intact because they
-generate interpreted managed bodies at runtime; weaving those generator
-libraries breaks that work.
+produce managed IL bodies at runtime; weaving those generator libraries breaks
+that work.
 
 ```mermaid
 flowchart LR
@@ -83,19 +84,20 @@ detours are added, removed, or reordered.
 The runtime retains the woven source image for each mod assembly. When a mod
 adds or changes an IL hook, the backend opens the original Cecil body, applies
 the ordered MonoMod `ILContext.Manipulator` callbacks, and loads a managed
-sidecar body for the iOS interpreter. Calls, locals, branches, and exception
+sidecar body for the CoreCLR interpreter. Calls, locals, branches, and exception
 regions are copied with the body. Removing the final manipulator restores the
 untouched original body.
 
-IL hooks can target closed methods or open generic definitions, including
-methods on open generic types. The weaver gives open generic targets a shared
-gate, and each interpreted sidecar closes over the concrete type and method
-arguments at dispatch time. `On` hooks and detours still require closed generic
-targets. Hook gates preserve unusual CLR signatures with exact typed delegates
-and generated managed adapters, so by-reference returns,
+IL hooks, reflected `On` hooks, and detours can target closed methods or open
+generic definitions, including methods on open generic types. The weaver gives
+open generic targets a shared gate, and each interpreted sidecar or reflected
+hook adapter closes over the concrete type and method arguments at dispatch
+time. Everest's delegate-based `AddOn` path still needs a closed target because
+its delegate has one fixed signature. Hook gates preserve unusual CLR signatures
+with exact typed delegates and generated managed adapters, so by-reference returns,
 `ref` / `out` / `in`, pointers, function pointers, typed references, and
 byref-like values do not cross an object-boxing boundary. The generated IL is
-loaded by Mono's interpreter and does not require runtime native-code emission.
+executed by CoreCLR's iOS interpreter and does not require runtime native-code emission.
 
 Fresh iOS weaving of the patched game and FNA inputs completed with 11,538 and
 3,817 methods woven and no skipped hookable bodies. The audited current mod DLL
@@ -121,7 +123,7 @@ iPad.
 
 ## Verification record
 
-Verification record (November 22, 2026):
+Verification record (November 25, 2026):
 
 - The standalone hook runtime harness passed nested `On` hooks, managed
   detours and trampolines, generic dispatch, struct `this`, `ref` copyback,
@@ -129,11 +131,13 @@ Verification record (November 22, 2026):
 - Everest published against the unpatched game and FNA references. Its patcher,
   HookGen, relink, and full assembly-weaving steps completed in CI-shaped
   staging from fresh game and FNA inputs in the earlier build pass.
-- The current Everest graph and updater catalog resolved six live roots:
+- The current Everest graph and updater catalog resolved seven live roots:
   Glyph, Into the Jungle, Strawberry Jam 2021, Secret Santa Collab 2024,
-  Crossover Collab, and Secret Santa Collab 2025. Their required closures had
-  4, 12, 51, 80, 74, and 9 downloadable packages respectively. Every current
-  catalog version met the declared minimum under Everest's version rule.
+  Secret Santa Collab 2025, Even More Legally Distinct Secret Santa, and
+  Crossover Collab. The closures had 6, 15, 54, 83, 11, 65, and 77 required
+  package edges respectively, including three built-in requirements. All 120
+  downloadable packages met their declared minimum versions; 11 optional edges
+  were retained and no archived fallback was needed in this audit.
   Case-insensitive lookup, duplicate constraint merging, optional dependency
   handling, cycle reporting, offline graph-cache fallback, and empty-graph
   rejection passed. Eight graph-required dependency edges across 104 inspected
@@ -156,8 +160,9 @@ Verification record (November 22, 2026):
   method compatibility. No package-specific dependency-resolution switch is
   used.
 
-The current code checks verify static dependency resolution and assembly
-weaving. A fresh GitHub iOS build, install on the iPhone 15 Pro and iPad Pro
-M1, controller play, and in-game checks with the six audited mod roots remain
-necessary before claiming device-level compatibility. Static checks cannot
-prove that every third-party code mod behaves correctly at runtime.
+The latest GitHub iOS build (run 45648499435) passed package and native-import
+verification. It has not been confirmed on a physical iPhone or iPad. Install
+and launch checks, controller play, and in-game checks with the seven audited
+campaign roots remain necessary before claiming device-level compatibility.
+Static checks cannot prove that every third-party code mod behaves correctly
+at runtime.

@@ -178,7 +178,14 @@ internal static class Program
         object stringGenericTarget = Activator.CreateInstance(stringGenericTargetType, new object[] { "open-type" });
         AssertEqual("open generic type reflected hook", "open-type",
             stringGenericTargetType.GetMethod("GetRef").Invoke(stringGenericTarget, null).ToString());
+        Type guidGenericTargetType = genericTargetDefinition.MakeGenericType(typeof(Guid));
+        Guid openTypeGuid = new Guid("0b94e1fc-1b49-4e06-9cc0-c74ef8605d51");
+        object guidGenericTarget = Activator.CreateInstance(guidGenericTargetType, new object[] { openTypeGuid });
+        AssertEqual("open generic type reflected hook on second instantiation", openTypeGuid.ToString(),
+            guidGenericTargetType.GetMethod("GetRef").Invoke(guidGenericTarget, null).ToString());
         IOSHookRuntime.RemoveOnReflected(openGenericTypeTarget, openGenericTypeHookIdentity);
+        AssertEqual("open generic type hook removal across instantiations", openTypeGuid.ToString(),
+            guidGenericTargetType.GetMethod("GetRef").Invoke(guidGenericTarget, null).ToString());
 
         MethodInfo openGenericCombinedTarget = genericTargetDefinition.GetMethod("Echo").GetGenericMethodDefinition();
         object openGenericCombinedIdentity = new object();
@@ -187,6 +194,9 @@ internal static class Program
         MethodInfo stringIntCombinedTarget = stringGenericTargetType.GetMethod("Echo").MakeGenericMethod(typeof(int));
         AssertEqual("open generic declaring type and method reflected hook", "29",
             stringIntCombinedTarget.Invoke(stringGenericTarget, new object[] { 29 }).ToString());
+        MethodInfo guidLongCombinedTarget = guidGenericTargetType.GetMethod("Echo").MakeGenericMethod(typeof(long));
+        AssertEqual("open generic declaring type and method hook on second instantiation", "37",
+            guidLongCombinedTarget.Invoke(guidGenericTarget, new object[] { 37L }).ToString());
         IOSHookRuntime.RemoveOnReflected(openGenericCombinedTarget, openGenericCombinedIdentity);
 
         object openGenericInstanceDetourIdentity = new object();
@@ -196,6 +206,10 @@ internal static class Program
             stringIntCombinedTarget.Invoke(stringGenericTarget, new object[] { 31 }).ToString());
         AssertEqual("open generic instance detour callback count", "1",
             stringGenericTargetType.GetField("DetourCalls").GetValue(stringGenericTarget).ToString());
+        AssertEqual("open generic instance detour on second instantiation", "41",
+            guidLongCombinedTarget.Invoke(guidGenericTarget, new object[] { 41L }).ToString());
+        AssertEqual("open generic second-instantiation detour callback count", "1",
+            guidGenericTargetType.GetField("DetourCalls").GetValue(guidGenericTarget).ToString());
         IOSHookRuntime.RemoveDetour(openGenericCombinedTarget, openGenericInstanceDetourIdentity);
 
         MethodInfo openGenericMethodTarget = genericMethodType.GetMethod("Echo").GetGenericMethodDefinition();
@@ -206,6 +220,10 @@ internal static class Program
         MethodInfo stringGenericMethodTarget = openGenericMethodTarget.MakeGenericMethod(typeof(string));
         AssertEqual("open generic method reflected hook", "open-method",
             stringGenericMethodTarget.Invoke(null, new object[] { "open-method" }).ToString());
+        MethodInfo guidGenericMethodTarget = openGenericMethodTarget.MakeGenericMethod(typeof(Guid));
+        object[] guidMethodArguments = { openTypeGuid };
+        AssertEqual("open generic method reflected hook on second instantiation", openTypeGuid.ToString(),
+            guidGenericMethodTarget.Invoke(null, guidMethodArguments).ToString());
         IOSHookRuntime.RemoveOnReflected(openGenericMethodTarget, openGenericMethodHookIdentity);
 
         MethodInfo genericDetourDefinition = crossHooksType.GetMethod("DetourGenericMethod");
@@ -334,7 +352,7 @@ internal static class Program
         AssertEqual("branchy class constructor hook", "13/123", $"{branchBaseValue}/{branchValue}");
         AssertEqual("generic chained class constructor hook", "29/1", $"{genericChainedBaseValue}/{genericChainedValue}");
         AssertEqual("generic targets", "31/17/23", $"{genericTypeRef}/{genericMethodRef}/{genericCombinedRef}");
-        AssertEqual("generic callbacks", "2/2/2", $"{genericTypeCalls}/{genericMethodCalls}/{genericCombinedCalls}");
+        AssertEqual("generic callbacks", "3/3/3", $"{genericTypeCalls}/{genericMethodCalls}/{genericCombinedCalls}");
         AssertEqual("generic IL hooks", "patched-type/patched-instance/patched-method",
             $"{genericILTypeMethod.Invoke(null, null)}/{genericILInstanceMethod.Invoke(genericILInstance, null)}/{genericILMethod.Invoke(null, null)}");
         AssertEqual("open generic method on a closed generic type", "patched-generic-instance",
