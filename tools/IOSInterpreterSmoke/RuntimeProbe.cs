@@ -908,7 +908,7 @@ public static class RuntimeProbe
         using (NLua.Lua lua = new NLua.Lua())
         {
             object[] values = lua.DoString("return 6 * 7");
-            if (values == null || values.Length != 1 || !(values[0] is double result) || result != 42d)
+            if (values == null || values.Length != 1 || Convert.ToInt64(values[0]) != 42L)
                 throw new InvalidOperationException("NLua did not execute a Lua chunk through the bundled KeraLua native runtime.");
         }
 
