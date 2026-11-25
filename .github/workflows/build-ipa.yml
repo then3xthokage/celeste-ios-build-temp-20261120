@@ -193,6 +193,11 @@ jobs:
             echo "PRIVATE_STORAGE_TOKEN cannot read the private input release. Check that its resource owner is hbashton, its repository selection includes celeste-ios-ci-temp-20261120, and Contents has read access." >&2
             exit 1
           fi
+          if ! repo_permissions="$(gh api "repos/$PRIVATE_STORAGE_REPO" --jq '[.private, .permissions.push] | @tsv' 2>/dev/null)" ||
+             [ "$repo_permissions" != $'true\ttrue' ]; then
+            echo "PRIVATE_STORAGE_TOKEN must have Contents write access to the private storage repository, which will hold IPA and crash-symbol outputs." >&2
+            exit 1
+          fi
 
       - name: Restore encrypted private input cache
         id: private-cache
@@ -548,10 +553,11 @@ jobs:
         if: vars.CELESTE_MOD_COMPATIBILITY_VERIFIED == 'true'
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+          PRIVATE_STORAGE_REPO: hbashton/celeste-ios-ci-temp-20261120
         run: |
           set -euo pipefail
-          output_repo="$GITHUB_REPOSITORY"
+          output_repo="$PRIVATE_STORAGE_REPO"
           output_tag="celeste-ios-build-output"
           if ! gh release view "$output_tag" --repo "$output_repo" >/dev/null 2>&1; then
             gh release create "$output_tag" \
@@ -568,10 +574,11 @@ jobs:
         if: github.event_name == 'push' || inputs.publish_device_test_ipa == true
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+          PRIVATE_STORAGE_REPO: hbashton/celeste-ios-ci-temp-20261120
         run: |
           set -euo pipefail
-          output_repo="$GITHUB_REPOSITORY"
+          output_repo="$PRIVATE_STORAGE_REPO"
           output_tag="celeste-ios-device-test-output"
           if ! gh release view "$output_tag" --repo "$output_repo" >/dev/null 2>&1; then
             gh release create "$output_tag" \
@@ -587,10 +594,11 @@ jobs:
       - name: Preserve matching iOS crash symbols
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PRIVATE_STORAGE_TOKEN }}
+          PRIVATE_STORAGE_REPO: hbashton/celeste-ios-ci-temp-20261120
         run: |
           set -euo pipefail
-          output_repo="$GITHUB_REPOSITORY"
+          output_repo="$PRIVATE_STORAGE_REPO"
           output_tag="celeste-ios-build-output"
           if ! gh release view "$output_tag" --repo "$output_repo" >/dev/null 2>&1; then
             gh release create "$output_tag" \
