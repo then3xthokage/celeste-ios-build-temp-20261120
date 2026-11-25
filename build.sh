@@ -892,8 +892,8 @@ if [ -z "$ipa_path" ]; then
 	error "the iOS app package was not generated"
 	exit 1
 fi
-if ! python3 "$script_dir/tools/verify-ios-native-exports.py" "$ipa_path" --native-imports "$native_export_manifest"; then
-	error "the packaged iOS app does not export every required runtime import and linked native library symbol"
+if ! python3 "$script_dir/tools/verify-ios-native-exports.py" "$ipa_path" --native-imports "$native_import_manifest"; then
+	error "the packaged iOS app does not export every required runtime import and platform entry point"
 	exit 1
 fi
 if ! mv "$ipa_path" "$script_dir/celestemeow.ipa"; then error "failed to move ipa"; exit 1; fi
