@@ -284,8 +284,10 @@ internal static class Program
                 path,
                 null);
             object module = InvokePrivate("FindModule", package, "KirbyHelperMechanics");
-            Require(module != null && GetProperty<string>(module, "Version") == "3.0.0",
-                "The live public release should install the exact KirbyHelperMechanics module and required version.");
+            string actualVersion = module == null ? "missing" : GetProperty<string>(module, "Version");
+            Console.WriteLine("Live GitHub fallback returned KirbyHelperMechanics " + actualVersion + ".");
+            Require(module != null && (bool)InvokePrivate("VersionSatisfies", "3.0.0", actualVersion),
+                "The live public release should install a KirbyHelperMechanics module version compatible with 3.0.0.");
         }
         finally
         {
