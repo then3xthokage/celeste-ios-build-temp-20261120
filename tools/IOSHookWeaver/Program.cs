@@ -251,7 +251,19 @@ public static class IOSHookWeaver
             if (main == null || !main.HasBody || main.Body.Instructions.Count == 0)
                 throw new InvalidDataException("The patched assembly does not contain static void Celeste.Celeste.Main(string[]) with a method body.");
 
-            Console.WriteLine("Verified iOS game launch method: " + main.FullName + ".");
+            bool redirectsBootstrapFiles = celesteType.Methods
+                .Where(method => method.HasBody)
+                .Any(method => method.Body.Instructions.Any(instruction =>
+                    instruction.OpCode == OpCodes.Ldstr &&
+                    string.Equals(instruction.Operand as string, "Celeste.IOSHookRuntime.EverestDataPath", StringComparison.Ordinal)) &&
+                    method.Body.Instructions.Any(instruction =>
+                        instruction.Operand is MethodReference calledMethod &&
+                        string.Equals(calledMethod.DeclaringType.FullName, "System.Environment", StringComparison.Ordinal) &&
+                        string.Equals(calledMethod.Name, "set_CurrentDirectory", StringComparison.Ordinal)));
+            if (!redirectsBootstrapFiles)
+                throw new InvalidDataException("Patched Celeste.Main is missing the iOS writable-bootstrap-path redirect.");
+
+            Console.WriteLine("Verified iOS game launch method and writable Everest bootstrap paths: " + main.FullName + ".");
         }
 
         return 0;

@@ -2,7 +2,8 @@ diff --git a/Celeste.Mod.mm/Celeste.Mod.mm.csproj b/Celeste.Mod.mm/Celeste.Mod.m
 index 058323b2..5cd163d4 100644
 --- a/Celeste.Mod.mm/Celeste.Mod.mm.csproj
 +++ b/Celeste.Mod.mm/Celeste.Mod.mm.csproj
-@@ -20,9 +20,11 @@
+@@ -19,11 +19,13 @@
+ 
    <ItemGroup>
      <Reference Include="Celeste">
 -      <HintPath>..\lib-stripped\Celeste.exe</HintPath>
@@ -16,11 +17,13 @@ index 058323b2..5cd163d4 100644
 +      <HintPath Condition="'$(EverestFNAReference)' == ''">..\lib-stripped\FNA.dll</HintPath>
        <Private>False</Private>
      </Reference>
+     <Reference Include="Steamworks.NET">
 diff --git a/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs b/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
 index af74430c..f22b45b6 100644
 --- a/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
 +++ b/Celeste.Mod.mm/Mod/Everest/Everest.Loader.cs
-@@ -967,21 +967,44 @@ namespace Celeste.Mod {
+@@ -966,23 +966,46 @@ namespace Celeste.Mod {
+                 if (depName == CoreModule.NETCoreMetaName)
                      depName = CoreModule.Instance.Metadata.Name;
  
 +                string normalizedDependencyName = NormalizeDependencyName(depName);
@@ -71,18 +74,22 @@ index af74430c..f22b45b6 100644
 +
              /// <summary>
              /// Checks if the given version number is "compatible" with the one required as a dependency.
+             /// </summary>
 diff --git a/Celeste.Mod.mm/Mod/Everest/Everest.cs b/Celeste.Mod.mm/Mod/Everest/Everest.cs
 index e473aa50..92feb119 100644
 --- a/Celeste.Mod.mm/Mod/Everest/Everest.cs
 +++ b/Celeste.Mod.mm/Mod/Everest/Everest.cs
-@@ -32,5 +32,5 @@ namespace Celeste.Mod {
+@@ -31,7 +31,7 @@ namespace Celeste.Mod {
+         // NOTE: THIS MUST BE THE FIRST THING SET UP BY THE CLASS CONSTRUCTOR.
          // OTHERWISE OLYMPUS WON'T BE ABLE TO FIND THIS!
          // The following line gets replaced by the buildbot automatically.
 -        public readonly static string VersionString = "0.0.0-dev";
 +        public readonly static string VersionString = "1.6696.0-ios";
          /// <summary>
          /// The currently installed Everest build in string form.
-@@ -351,5 +351,10 @@ namespace Celeste.Mod {
+         /// </summary>
+@@ -350,7 +350,12 @@ namespace Celeste.Mod {
+             Assembly.Load("Newtonsoft.Json");
              Assembly.Load("Jdenticon");
  
 -            if (!File.Exists(Path.Combine(PathGame, "EverestXDGFlag"))) {
@@ -94,7 +101,9 @@ index e473aa50..92feb119 100644
 +            } else if (!File.Exists(Path.Combine(PathGame, "EverestXDGFlag"))) {
                  XDGPaths = false;
                  PathEverest = PathGame;
-@@ -895,5 +900,9 @@ namespace Celeste.Mod {
+             } else {
+@@ -894,7 +899,11 @@ namespace Celeste.Mod {
+                 CoreModule.Instance.SaveSettings();
              }
  
 -            Events.Celeste.OnShutdown += static () => BOOT.StartCelesteProcess();
@@ -105,11 +114,12 @@ index e473aa50..92feb119 100644
 +            }
              scene.RunAfterRender = () => Engine.Instance.Exit();
              yield break;
+         }
 diff --git a/Celeste.Mod.mm/Mod/Helpers/CompressedHttpClient.cs b/Celeste.Mod.mm/Mod/Helpers/CompressedHttpClient.cs
 index ec688e99..5dac4177 100755
 --- a/Celeste.Mod.mm/Mod/Helpers/CompressedHttpClient.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/CompressedHttpClient.cs
-@@ -1,11 +1,13 @@
+@@ -1,31 +1,65 @@
  ﻿using System;
 +using System.IO;
  using System.Net;
@@ -124,7 +134,7 @@ index ec688e99..5dac4177 100755
 +    /// An HttpClient that supports compressed responses to save bandwidth and works with IPv4 and IPv6 endpoints.
      /// </summary>
      public class CompressedHttpClient : HttpClient {
-@@ -13,18 +15,50 @@ namespace Celeste.Mod.Helpers {
+         private static SocketsHttpHandler handler = new SocketsHttpHandler() {
              AutomaticDecompression = DecompressionMethods.All,
              ConnectCallback = async delegate (SocketsHttpConnectionContext ctx, CancellationToken token) {
 -                if (ctx.DnsEndPoint.AddressFamily != AddressFamily.Unspecified && ctx.DnsEndPoint.AddressFamily != AddressFamily.InterNetwork) {
@@ -186,11 +196,13 @@ index ec688e99..5dac4177 100755
 +        }
  
          public CompressedHttpClient() : base(handler, disposeHandler: false) {
+             DefaultRequestHeaders.Add("User-Agent", $"Everest/{Everest.VersionString}");
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
 index b82f6efc..b0c4f1cb 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Detour.cs
-@@ -33,9 +33,20 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -32,11 +32,22 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         public static Func<LegacyDetour, MethodBase, MethodBase> OnGenerateTrampoline;
  
          private Hook actualHook;
 -
@@ -214,7 +226,9 @@ index b82f6efc..b0c4f1cb 100644
 +                }
                  MethodDetourInfo info = DetourManager.GetDetourInfo(Method);
                  using (info.WithLock())
-@@ -47,4 +58,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                     return info.FirstDetour == actualHook?.DetourInfo;
+@@ -46,6 +57,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         // NOTE: This behaves slightly differently - legacy MonoMod kept non-applied detours in the chain as well
          public int Index {
              get {
 +                if (_iosHook) {
@@ -224,7 +238,9 @@ index b82f6efc..b0c4f1cb 100644
 +                }
                  if (actualHook?.IsApplied ?? false)
                      return -1;
-@@ -58,4 +74,8 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+@@ -57,6 +73,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
          public int MaxIndex {
              get {
 +                if (_iosHook) {
@@ -233,31 +249,41 @@ index b82f6efc..b0c4f1cb 100644
 +                }
                  MethodDetourInfo info = DetourManager.GetDetourInfo(Method);
                  using (info.WithLock())
-@@ -74,4 +94,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                     return info.Detours.Count();
+@@ -73,6 +93,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                 if (_Priority == value)
                      return;
                  _Priority = value;
 +                if (_iosHook) _iosConfig.Priority = value;
                  _Refresh();
              }
-@@ -87,4 +108,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         }
+@@ -86,6 +107,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                 if (_ID == value)
                      return;
                  _ID = value;
 +                if (_iosHook) _iosConfig.ID = value;
                  _Refresh();
              }
-@@ -101,4 +123,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         }
+@@ -100,6 +122,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                     if (value != null)
                          foreach (string id in value)
                              _Before.Add(id);
 +                    if (_iosHook) _iosConfig.Before = _Before.ToArray();
                      _Refresh();
                  }
-@@ -117,4 +140,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             }
+@@ -116,6 +139,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                     if (value != null)
                          foreach (string id in value)
                              _After.Add(id);
 +                    if (_iosHook) _iosConfig.After = _After.ToArray();
                      _Refresh();
                  }
-@@ -131,5 +155,6 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             }
+@@ -130,13 +154,14 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         private ICoreDetour _ChainedTrampolineDetour;
  
          public LegacyDetour(MethodBase from, MethodBase to, LegacyDetourConfig config) {
 -            from = from.GetIdentifiable();
@@ -265,14 +291,16 @@ index b82f6efc..b0c4f1cb 100644
 +                from = from.GetIdentifiable();
              if (from.Equals(to))
                  throw new ArgumentException("Cannot LegacyDetour a method to itself!");
-@@ -137,5 +162,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
              Method = from;
              Target = to;
 -            TargetReal = PlatformTriple.Current.GetRealDetourTarget(from, to);
 +            TargetReal = to;
  
              _GlobalIndex = AcquireGlobalIndex();
-@@ -148,4 +173,16 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             _Priority = config.Priority;
+@@ -147,6 +172,18 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (config.After != null)
                  _After.AddRange(config.After);
  
 +            // On iOS the static hook gate is the only detour backend. Avoid
@@ -289,7 +317,9 @@ index b82f6efc..b0c4f1cb 100644
 +
              // Generate a "chained trampoline" DynamicMethod.
              ParameterInfo[] args = Method.GetParameters();
-@@ -169,4 +206,22 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             Type[] argTypes;
+@@ -168,6 +205,24 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                 Apply();
          }
  
 +        // A LegacyHook normally exposes the LegacyDetour that backs it. On iOS
@@ -312,7 +342,9 @@ index b82f6efc..b0c4f1cb 100644
 +
          public LegacyDetour(MethodBase from, MethodBase to, ref LegacyDetourConfig config) : this(from, to, config) {}
          public LegacyDetour(MethodBase from, MethodBase to) : this(from, to, LegacyDetourContext.Current?.DetourConfig ?? default) {}
-@@ -205,4 +260,20 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         public LegacyDetour(MethodBase method, IntPtr to, ref LegacyDetourConfig config) : this(method, LegacyDetourHelper.GenerateNativeProxy(to, method), ref config) {}
+@@ -204,6 +259,22 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
                  throw new ObjectDisposedException(nameof(LegacyDetour));
  
 +            if (_iosHookOwner != null) {
@@ -333,7 +365,9 @@ index b82f6efc..b0c4f1cb 100644
 +
              if (IsApplied || !(OnDetour?.InvokeWhileTrue(this, Method, Target) ?? true))
                  return;
-@@ -216,4 +287,18 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+@@ -215,6 +286,20 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
                  throw new ObjectDisposedException(nameof(LegacyDetour));
  
 +            if (_iosHookOwner != null) {
@@ -352,7 +386,9 @@ index b82f6efc..b0c4f1cb 100644
 +
              if (!IsApplied || !(OnUndo?.InvokeWhileTrue(this) ?? true))
                  return;
-@@ -227,4 +312,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+@@ -226,6 +311,17 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
                  return;
  
 +            if (_iosHookOwner != null) {
@@ -368,7 +404,9 @@ index b82f6efc..b0c4f1cb 100644
 +
              Undo();
              IsValid = false;
-@@ -243,4 +339,19 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         }
+@@ -242,6 +338,21 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
                  return;
  
 +            if (_iosHookOwner != null) {
@@ -388,7 +426,9 @@ index b82f6efc..b0c4f1cb 100644
 +
              actualHook?.Dispose();
              if (IsApplied) {
-@@ -261,4 +372,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                 actualHook = new Hook(Method, (MethodInfo) Target, LegacyDetourContext.CreateLegacyDetourConfig(ID, Priority, Before, After, GlobalIndex));
+@@ -260,6 +371,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (remoteTrampoline != null)
                  return remoteTrampoline;
  
 +            if (_iosHook) {
@@ -400,11 +440,13 @@ index b82f6efc..b0c4f1cb 100644
 +
              if (signature == null)
                  signature = Target;
+ 
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
 index 5ab6d3d7..e720df8b 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/Hook.cs
-@@ -26,6 +26,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -25,8 +25,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         public static Func<LegacyHook, bool> OnUndo;
          public static Func<LegacyHook, MethodBase, MethodBase> OnGenerateTrampoline;
  
 -        public bool IsValid => _Detour.IsValid;
@@ -418,7 +460,9 @@ index 5ab6d3d7..e720df8b 100644
 +        public bool IsApplied => _iosHook ? _iosApplied : _Detour.IsApplied;
  
          public readonly MethodBase Method;
-@@ -51,5 +56,6 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         public readonly MethodBase Target;
+@@ -50,7 +55,8 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         private int? _RefTrampolineTmp => _RefTrampolineTmpCell?.Data.Index;
  
          public LegacyHook(MethodBase from, MethodInfo to, object target, ref LegacyHookConfig config) {
 -            from = from.GetIdentifiable();
@@ -426,7 +470,9 @@ index 5ab6d3d7..e720df8b 100644
 +                from = from.GetIdentifiable();
              Method = from;
              Target = to;
-@@ -97,4 +103,26 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             DelegateTarget = target;
+@@ -96,6 +102,28 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
              MethodInfo origInvoke = _OrigDelegateInvoke = origType?.GetMethod("Invoke");
  
 +            // Preserve the public hook target descriptor when the iOS managed
@@ -453,7 +499,9 @@ index 5ab6d3d7..e720df8b 100644
 +
              DynamicMethodDefinition dmd;
              ILProcessor il;
-@@ -209,4 +237,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+@@ -208,6 +236,17 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
                  throw new ObjectDisposedException(nameof(LegacyHook));
  
 +            if (_iosHook) {
@@ -469,7 +517,9 @@ index 5ab6d3d7..e720df8b 100644
 +
              if (!IsApplied && !(OnDetour?.InvokeWhileTrue(this, Method, Target, DelegateTarget) ?? true))
                  return;
-@@ -219,4 +258,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+@@ -218,6 +257,15 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
                  throw new ObjectDisposedException(nameof(LegacyHook));
  
 +            if (_iosHook) {
@@ -483,7 +533,9 @@ index 5ab6d3d7..e720df8b 100644
 +
              if (IsApplied && !(OnUndo?.InvokeWhileTrue(this) ?? true))
                  return;
-@@ -231,8 +279,37 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+@@ -230,10 +278,39 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
                  return;
  
 +            if (_iosHook) {
@@ -521,11 +573,13 @@ index 5ab6d3d7..e720df8b 100644
 +
          private void _Free() {
              _RefTargetCell?.Dispose();
+             _RefTrampolineCell?.Dispose();
 diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
 index 15b1c509..99c02240 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/HookEndpointManager.cs
-@@ -20,8 +20,76 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -19,10 +19,78 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
          private static ConcurrentDictionary<(MethodBase, Delegate), Hook> Hooks = new ConcurrentDictionary<(MethodBase, Delegate), Hook>();
          private static ConcurrentDictionary<(MethodBase, Delegate), ILHook> ILHooks = new ConcurrentDictionary<(MethodBase, Delegate), ILHook>();
 +        private static ConcurrentDictionary<(MethodBase, Delegate), byte> IOSHooks = new ConcurrentDictionary<(MethodBase, Delegate), byte>();
@@ -603,7 +657,9 @@ index 15b1c509..99c02240 100644
 +                if (type.Namespace != null && type.Namespace.StartsWith("Celeste.Mod", StringComparison.Ordinal))
                      return true;
  
-@@ -46,4 +114,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             return false;
+@@ -45,6 +113,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
          public static void Add<T>(MethodBase method, Delegate hookDelegate) where T : Delegate => Add(method, hookDelegate);
          public static void Add(MethodBase method, Delegate hookDelegate) {
 +            if (TryAddIOSHook(method, hookDelegate))
@@ -611,7 +667,9 @@ index 15b1c509..99c02240 100644
 +
              if (IsEverestInternalMethod(method) && IsCoreModCaller(hookDelegate))
                  throw new InvalidOperationException("Core mods may not add hooks to Everest internal methods");
-@@ -61,4 +132,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+@@ -60,6 +131,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
          public static void Remove<T>(MethodBase method, Delegate hookDelegate) where T : Delegate => Remove(method, hookDelegate);
          public static void Remove(MethodBase method, Delegate hookDelegate) {
 +            if (TryRemoveIOSHook(method, hookDelegate))
@@ -619,7 +677,9 @@ index 15b1c509..99c02240 100644
 +
              if (IsEverestInternalMethod(method) && IsCoreModCaller(hookDelegate))
                  throw new InvalidOperationException("Core mods may not remove hooks from Everest internal methods");
-@@ -70,4 +144,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+@@ -69,6 +143,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
          public static void Modify<T>(MethodBase method, Delegate callback) where T : Delegate => Modify(method, callback);
          public static void Modify(MethodBase method, Delegate callback) {
 +            if (TryAddIOSILHook(method, callback))
@@ -627,7 +687,9 @@ index 15b1c509..99c02240 100644
 +
              if (IsEverestInternalMethod(method) && IsCoreModCaller(callback))
                  throw new InvalidOperationException("Core mods may not add hooks to Everest internal methods");
-@@ -84,4 +161,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+@@ -83,6 +160,9 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
          public static void Unmodify<T>(MethodBase method, Delegate callback) => Unmodify(method, callback);
          public static void Unmodify(MethodBase method, Delegate callback) {
 +            if (TryRemoveIOSILHook(method, callback))
@@ -635,7 +697,9 @@ index 15b1c509..99c02240 100644
 +
              if (IsEverestInternalMethod(method) && IsCoreModCaller(callback))
                  throw new InvalidOperationException("Core mods may not remove hooks from Everest internal methods");
-@@ -92,4 +172,11 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+@@ -91,6 +171,13 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         }
  
          public static void Clear() {
 +            if (IOSHooks.Count > 0 || IOSILHooks.Count > 0) {
@@ -647,7 +711,9 @@ index 15b1c509..99c02240 100644
 +
              foreach (Hook hook in Hooks.Values)
                  hook.Dispose();
-@@ -101,3 +188,3 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             Hooks.Clear();
+@@ -100,4 +187,4 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             ILHooks.Clear();
          }
      }
 -}
@@ -657,13 +723,16 @@ diff --git a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs b/Celeste.Mod.mm
 index 1e53c174..470e5a15 100644
 --- a/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs
 +++ b/Celeste.Mod.mm/Mod/Helpers/LegacyMonoMod/ILHook.cs
-@@ -34,4 +34,5 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+@@ -33,6 +33,7 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         internal static uint AcquireGlobalIndex() => Interlocked.Increment(ref _GlobalIndexNext)-1;
  
          private ILHook actualHook;
 +        private bool IOSManagedBackend => AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.AddIL") is Action<MethodBase, Delegate, object>;
  
          public bool IsValid { get; private set; } = true;
-@@ -41,4 +42,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         public bool IsApplied { get; private set; }
+@@ -40,6 +41,12 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+         // NOTE: This behaves slightly differently - legacy MonoMod kept non-applied hooks in the chain as well
          public int Index {
              get {
 +                if (IOSManagedBackend) {
@@ -674,7 +743,9 @@ index 1e53c174..470e5a15 100644
 +                }
                  if (actualHook?.IsApplied ?? false)
                      return -1;
-@@ -52,4 +59,8 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
+@@ -51,6 +58,10 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+ 
          public int MaxIndex {
              get {
 +                if (IOSManagedBackend) {
@@ -683,7 +754,9 @@ index 1e53c174..470e5a15 100644
 +                }
                  MethodDetourInfo info = DetourManager.GetDetourInfo(Method);
                  using (info.WithLock())
-@@ -178,4 +189,14 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+                     return info.ILHooks.Count();
+@@ -177,6 +188,16 @@ namespace Celeste.Mod.Helpers.LegacyMonoMod {
+             if (!IsValid)
                  return;
  
 +            if (IOSManagedBackend) {
@@ -698,11 +771,13 @@ index 1e53c174..470e5a15 100644
 +
              actualHook?.Dispose();
              if (IsApplied) {
+                 actualHook = new ILHook(Method, Manipulator, LegacyDetourContext.CreateLegacyDetourConfig(ID, Priority, Before, After, GlobalIndex, true));
 diff --git a/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs b/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs
 index 2a508cfa..2b1e19d3 100644
 --- a/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs
 +++ b/Celeste.Mod.mm/Mod/Module/EverestModuleAssemblyContext.cs
-@@ -507,9 +507,23 @@ namespace Celeste.Mod {
+@@ -506,11 +506,25 @@ namespace Celeste.Mod {
+ 
                  Assembly asm;
                  string symPath = Path.ChangeExtension(path, "pdb");
 +                byte[] iosWovenImage = null;
@@ -727,11 +802,41 @@ index 2a508cfa..2b1e19d3 100644
 +                    iosRegister(asm, iosWovenImage);
  
                  // Insert into dictionaries
+                 string asmName = asm.GetName().Name;
+diff --git a/Celeste.Mod.mm/Mod/UI/AutoModUpdater.cs b/Celeste.Mod.mm/Mod/UI/AutoModUpdater.cs
+index d970f6f3..75a9de08 100755
+--- a/Celeste.Mod.mm/Mod/UI/AutoModUpdater.cs
++++ b/Celeste.Mod.mm/Mod/UI/AutoModUpdater.cs
+@@ -94,7 +94,7 @@ namespace Celeste.Mod.UI {
+             int currentlyUpdatedModIndex = 1;
+ 
+             // this is common to all mods.
+-            string zipPath = Path.Combine(Everest.PathGame, "mod-update.zip");
++            string zipPath = Path.Combine(Everest.PathTmp, "mod-update.zip");
+ 
+             bool restartRequired = false;
+             bool failuresOccured = false;
+diff --git a/Celeste.Mod.mm/Mod/UI/CriticalErrorHandler.cs b/Celeste.Mod.mm/Mod/UI/CriticalErrorHandler.cs
+index 24d0d81d..013b624d 100644
+--- a/Celeste.Mod.mm/Mod/UI/CriticalErrorHandler.cs
++++ b/Celeste.Mod.mm/Mod/UI/CriticalErrorHandler.cs
+@@ -161,7 +161,9 @@ namespace Celeste.Mod.UI {
+ 
+             // Choose a backup file name
+             string backupBaseName = $"log_{DateTime.Now:yyyyMMdd_HHmmss}";
+-            string backupPath = Path.Combine(Everest.PathGame, "CrashLogs", $"{backupBaseName}.txt");
++            string iosDataPath = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.EverestDataPath") as string;
++            string crashLogDirectory = string.IsNullOrWhiteSpace(iosDataPath) ? Everest.PathGame : iosDataPath;
++            string backupPath = Path.Combine(crashLogDirectory, "CrashLogs", $"{backupBaseName}.txt");
+             for (int idx = 2; File.Exists(backupPath); idx++)
+                 backupPath = Path.Combine(Path.GetDirectoryName(backupPath), $"{backupBaseName}_{idx}.txt");
+ 
 diff --git a/Celeste.Mod.mm/Patches/AscendManager.cs b/Celeste.Mod.mm/Patches/AscendManager.cs
 index ed37b81f..efd2739c 100644
 --- a/Celeste.Mod.mm/Patches/AscendManager.cs
 +++ b/Celeste.Mod.mm/Patches/AscendManager.cs
-@@ -44,7 +44,12 @@ namespace MonoMod {
+@@ -43,9 +43,14 @@ namespace MonoMod {
+             MethodDefinition m_ShouldRestorePlayerX = method.DeclaringType.FindMethod("System.Boolean ShouldRestorePlayerX()");
              MethodDefinition m_Entity_set_X = method.Module.GetType("Monocle.Entity").FindMethod("System.Void set_X(System.Single)").Resolve();
  
 -            FieldDefinition f_this = routine.DeclaringType.FindField("<>4__this");
@@ -747,7 +852,9 @@ index ed37b81f..efd2739c 100644
 +                throw new InvalidOperationException("Could not resolve AscendManager.Routine captured state fields by type.");
              FieldReference f_Vector2_X = MonoModRule.Modder.Module.ImportReference(t_Vector2.FindField("X"));
  
-@@ -79,4 +84,15 @@ namespace MonoMod {
+             new ILContext(routine).Invoke(il => {
+@@ -78,5 +83,16 @@ namespace MonoMod {
+             });
          }
  
 +        private static FieldDefinition FindSingleField(TypeDefinition stateMachine, TypeDefinition expectedType) {
@@ -763,11 +870,335 @@ index ed37b81f..efd2739c 100644
 +
      }
  }
+diff --git a/Celeste.Mod.mm/Patches/Celeste.cs b/Celeste.Mod.mm/Patches/Celeste.cs
+index e71d6367..ce134f41 100644
+--- a/Celeste.Mod.mm/Patches/Celeste.cs
++++ b/Celeste.Mod.mm/Patches/Celeste.cs
+@@ -38,164 +38,190 @@ namespace Celeste {
+         public static extern void orig_Main(string[] args);
+         [MonoModPublic]
+         public static void Main(string[] args) {
+-            SetHeadlessFlag();
+-
+-            if (Thread.CurrentThread.Name != "Main Thread") {
+-                Thread.CurrentThread.Name = "Main Thread";
++            string iosDataPath = AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.EverestDataPath") as string;
++            string iosOriginalWorkingDirectory = null;
++            if (!string.IsNullOrWhiteSpace(iosDataPath)) {
++                iosDataPath = Path.GetFullPath(iosDataPath);
++                Directory.CreateDirectory(iosDataPath);
++                iosOriginalWorkingDirectory = Environment.CurrentDirectory;
++                Environment.CurrentDirectory = iosDataPath;
+             }
+ 
+-            // we assume FNA since Everest Core.
+-            string correctFile = "BuildIsFNA.txt";
+-            string wrongFile = "BuildIsXNA.txt";
+-            if (File.Exists(wrongFile))
+-                File.Delete(wrongFile);
+-            if (!File.Exists(correctFile))
+-                File.WriteAllText(correctFile, "");
+-
+-            if (File.Exists("everest-launch.txt")) {
+-                args =
+-                    File.ReadAllLines("everest-launch.txt")
+-                    .Select(l => l.Trim())
+-                    .Where(l => !l.StartsWith("#"))
+-                    .SelectMany(l => l.Split(' '))
+-                    .Concat(args)
+-                    .ToArray();
+-            } else {
+-                using (StreamWriter writer = File.CreateText("everest-launch.txt")) {
+-                    writer.WriteLine("# Add any Everest launch flags here.");
+-                    writer.WriteLine("# Lines starting with # are ignored.");
+-                    writer.WriteLine("# All options here are disabled by default.");
+-                    writer.WriteLine("# Full list: https://github.com/EverestAPI/Resources/wiki/Command-Line-Arguments");
+-                    writer.WriteLine();
+-                    writer.WriteLine("# Windows only: open a separate log console window.");
+-                    writer.WriteLine("#--console");
+-                    writer.WriteLine();
+-                    writer.WriteLine("# FNA only: force OpenGL (might be necessary to bypass a load crash on some PCs).");
+-                    writer.WriteLine("#--graphics OpenGL");
+-                    writer.WriteLine();
+-                    writer.WriteLine("# Change default log level (verbose will print all logs).");
+-                    writer.WriteLine("#--loglevel verbose");
+-
+-                    if (File.Exists("launch.txt")) {
+-                        using (StreamReader reader = File.OpenText("launch.txt")) {
+-                            writer.WriteLine();
+-                            writer.WriteLine();
+-                            writer.WriteLine("# The following options are migrated from the old launch.txt and force-disabled.");
+-                            writer.WriteLine("# Some of them might not work anymore or cause unwanted effects.");
+-                            writer.WriteLine();
+-                            writer.WriteLine();
+-                            for (string line; (line = reader.ReadLine()) != null;) {
+-                                writer.Write("#");
+-                                writer.WriteLine(line);
++            try {
++                // Keep Everest bootstrap files writable, then restore the bundle directory for Content assets.
++                SetHeadlessFlag();
++
++                if (Thread.CurrentThread.Name != "Main Thread") {
++                    Thread.CurrentThread.Name = "Main Thread";
++                }
++
++                // we assume FNA since Everest Core.
++                string correctFile = "BuildIsFNA.txt";
++                string wrongFile = "BuildIsXNA.txt";
++                if (File.Exists(wrongFile))
++                    File.Delete(wrongFile);
++                if (!File.Exists(correctFile))
++                    File.WriteAllText(correctFile, "");
++
++                if (File.Exists("everest-launch.txt")) {
++                    args =
++                        File.ReadAllLines("everest-launch.txt")
++                        .Select(l => l.Trim())
++                        .Where(l => !l.StartsWith("#"))
++                        .SelectMany(l => l.Split(' '))
++                        .Concat(args)
++                        .ToArray();
++                } else {
++                    using (StreamWriter writer = File.CreateText("everest-launch.txt")) {
++                        writer.WriteLine("# Add any Everest launch flags here.");
++                        writer.WriteLine("# Lines starting with # are ignored.");
++                        writer.WriteLine("# All options here are disabled by default.");
++                        writer.WriteLine("# Full list: https://github.com/EverestAPI/Resources/wiki/Command-Line-Arguments");
++                        writer.WriteLine();
++                        writer.WriteLine("# Windows only: open a separate log console window.");
++                        writer.WriteLine("#--console");
++                        writer.WriteLine();
++                        writer.WriteLine("# FNA only: force OpenGL (might be necessary to bypass a load crash on some PCs).");
++                        writer.WriteLine("#--graphics OpenGL");
++                        writer.WriteLine();
++                        writer.WriteLine("# Change default log level (verbose will print all logs).");
++                        writer.WriteLine("#--loglevel verbose");
++
++                        if (File.Exists("launch.txt")) {
++                            using (StreamReader reader = File.OpenText("launch.txt")) {
++                                writer.WriteLine();
++                                writer.WriteLine();
++                                writer.WriteLine("# The following options are migrated from the old launch.txt and force-disabled.");
++                                writer.WriteLine("# Some of them might not work anymore or cause unwanted effects.");
++                                writer.WriteLine();
++                                writer.WriteLine();
++                                for (string line; (line = reader.ReadLine()) != null;) {
++                                    writer.Write("#");
++                                    writer.WriteLine(line);
++                                }
+                             }
++                            File.Delete("launch.txt");
+                         }
+-                        File.Delete("launch.txt");
+                     }
+                 }
+-            }
+-
+-            if (File.Exists("everest-env.txt")) {
+-                foreach (string line in File.ReadAllLines("everest-env.txt")) {
+-                    if (line.StartsWith("#"))
+-                        continue;
+ 
+-                    int index = line.IndexOf('=');
+-                    if (index == -1)
+-                        continue;
+-
+-                    string key = line.Substring(0, index).Trim();
+-                    if (key.StartsWith("'") && key.EndsWith("'"))
+-                        key = key.Substring(1, key.Length - 2);
+-
+-                    string value = line.Substring(index + 1).Trim();
+-                    if (value.StartsWith("'") && value.EndsWith("'"))
+-                        value = value.Substring(1, value.Length - 2);
++                if (File.Exists("everest-env.txt")) {
++                    foreach (string line in File.ReadAllLines("everest-env.txt")) {
++                        if (line.StartsWith("#"))
++                            continue;
++
++                        int index = line.IndexOf('=');
++                        if (index == -1)
++                            continue;
++
++                        string key = line.Substring(0, index).Trim();
++                        if (key.StartsWith("'") && key.EndsWith("'"))
++                            key = key.Substring(1, key.Length - 2);
++
++                        string value = line.Substring(index + 1).Trim();
++                        if (value.StartsWith("'") && value.EndsWith("'"))
++                            value = value.Substring(1, value.Length - 2);
++
++                        if (key.EndsWith("!")) {
++                            key = key.Substring(0, key.Length - 1);
++                        } else {
++                            value = value
++                                .Replace("\\r", "\r")
++                                .Replace("\\n", "\n")
++                                .Replace($"${{{key}}}", Environment.GetEnvironmentVariable(key) ?? "");
++                        }
+ 
+-                    if (key.EndsWith("!")) {
+-                        key = key.Substring(0, key.Length - 1);
+-                    } else {
+-                        value = value
+-                            .Replace("\\r", "\r")
+-                            .Replace("\\n", "\n")
+-                            .Replace($"${{{key}}}", Environment.GetEnvironmentVariable(key) ?? "");
++                        Environment.SetEnvironmentVariable(key, value);
+                     }
+-
+-                    Environment.SetEnvironmentVariable(key, value);
+                 }
+-            }
+ 
+-            bool allocedConsole = false;
+-            if (args.Contains("--console") && RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) {
+-                AllocConsole();
++                bool allocedConsole = false;
++                if (args.Contains("--console") && RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) {
++                    AllocConsole();
+ 
+-                // Invalidate console streams
+-                typeof(Console).GetField("s_in", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
+-                typeof(Console).GetField("s_out", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
+-                typeof(Console).GetField("s_error", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
++                    // Invalidate console streams
++                    typeof(Console).GetField("s_in", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
++                    typeof(Console).GetField("s_out", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
++                    typeof(Console).GetField("s_error", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, null);
+ 
+-                allocedConsole = true;
+-            }
++                    allocedConsole = true;
++                }
+ 
+-            if (args.Contains("--nolog")) {
+-                MainInner(args);
+-                return;
+-            }
++                if (args.Contains("--nolog")) {
++                    if (iosOriginalWorkingDirectory != null) {
++                        Environment.CurrentDirectory = iosOriginalWorkingDirectory;
++                        iosOriginalWorkingDirectory = null;
++                    }
++                    MainInner(args);
++                    return;
++                }
+ 
+-            string logfile = Environment.GetEnvironmentVariable("EVEREST_LOG_FILENAME") ?? "log.txt";
++                string logfile = Environment.GetEnvironmentVariable("EVEREST_LOG_FILENAME") ?? "log.txt";
+ 
+-            // Only applying log rotation on default name, feel free to improve LogRotationHelper to deal with custom log file names...
+-            if (logfile == "log.txt" && File.Exists("log.txt")) {
+-                if (new FileInfo("log.txt").Length > 0) {
+-                    // move the old log.txt to the LogHistory folder.
+-                    // note that the cleanup will only be done when the core module is loaded: the settings aren't even loaded right now,
+-                    // so we don't know how many files we should keep.
+-                    if (!Directory.Exists("LogHistory")) {
+-                        Directory.CreateDirectory("LogHistory");
++                // Only applying log rotation on default name, feel free to improve LogRotationHelper to deal with custom log file names...
++                if (logfile == "log.txt" && File.Exists("log.txt")) {
++                    if (new FileInfo("log.txt").Length > 0) {
++                        // move the old log.txt to the LogHistory folder.
++                        // note that the cleanup will only be done when the core module is loaded: the settings aren't even loaded right now,
++                        // so we don't know how many files we should keep.
++                        if (!Directory.Exists("LogHistory")) {
++                            Directory.CreateDirectory("LogHistory");
++                        }
++                        File.Move("log.txt", Path.Combine("LogHistory", LogRotationHelper.GetFileNameByDate(File.GetLastWriteTime("log.txt"))));
++                    } else {
++                        // log is empty! (this actually happens more often than you'd think, because of Steam re-opening Celeste)
++                        // just delete it.
++                        File.Delete("log.txt");
+                     }
+-                    File.Move("log.txt", Path.Combine("LogHistory", LogRotationHelper.GetFileNameByDate(File.GetLastWriteTime("log.txt"))));
+                 } else {
+-                    // log is empty! (this actually happens more often than you'd think, because of Steam re-opening Celeste)
+-                    // just delete it.
+-                    File.Delete("log.txt");
+-                }
+-            } else {
+-                // check if log filename is allowed
+-                Regex regexBadCharacter = new Regex("[" + Regex.Escape(new string(Path.GetInvalidFileNameChars())) + "]");
+-                Match match = regexBadCharacter.Match(logfile);
++                    // check if log filename is allowed
++                    Regex regexBadCharacter = new Regex("[" + Regex.Escape(new string(Path.GetInvalidFileNameChars())) + "]");
++                    Match match = regexBadCharacter.Match(logfile);
+ 
+-                if (match.Success) {
+-                    StringBuilder errorText = new StringBuilder($"Custom log filename set in EVEREST_LOG_FILENAME=\"{logfile}\" contains invalid character(s): ", 100);
++                    if (match.Success) {
++                        StringBuilder errorText = new StringBuilder($"Custom log filename set in EVEREST_LOG_FILENAME=\"{logfile}\" contains invalid character(s): ", 100);
+ 
+-                    while (match.Success) {
+-                        foreach (Capture c in match.Groups[0].Captures)
+-                            errorText.Append(c);
++                        while (match.Success) {
++                            foreach (Capture c in match.Groups[0].Captures)
++                                errorText.Append(c);
+ 
+-                        match = match.NextMatch();
+-                        if (match.Success)
+-                            errorText.Append(" ");
++                            match = match.NextMatch();
++                            if (match.Success)
++                                errorText.Append(" ");
++                        }
++
++                        throw new ArgumentException(errorText.ToString());
+                     }
+ 
+-                    throw new ArgumentException(errorText.ToString());
++                    if (!logfile.EndsWith(".txt"))
++                        logfile += ".txt";
+                 }
+ 
+-                if (!logfile.EndsWith(".txt"))
+-                    logfile += ".txt";
+-            }
++                if (!string.IsNullOrWhiteSpace(iosDataPath) && !Path.IsPathRooted(logfile))
++                    logfile = Path.Combine(iosDataPath, logfile);
+ 
+-            Everest.PathLog = logfile;
++                Everest.PathLog = logfile;
+ 
+-            using (Stream fileStream = new FileStream(logfile, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+-            using (StreamWriter fileWriter = new StreamWriter(fileStream, Console.OutputEncoding))
+-            using (LogWriter logWriter = new LogWriter(Console.Out, Console.Error, fileWriter)) {
+-                Logger.outWriter = logWriter.STDOUT.Stream;
+-                Logger.logWriter = logWriter.File;
++                using (Stream fileStream = new FileStream(logfile, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
++                using (StreamWriter fileWriter = new StreamWriter(fileStream, Console.OutputEncoding))
++                using (LogWriter logWriter = new LogWriter(Console.Out, Console.Error, fileWriter)) {
++                    Logger.outWriter = logWriter.STDOUT.Stream;
++                    Logger.logWriter = logWriter.File;
+ 
+-                // Setup Windows VT support as early as possible, to avoid escape codes being printed
+-                if (allocedConsole && Logger.earlyBootColorizedLogging && !Logger.TryEnableWindowsVTSupport()) {
+-                    Logger.Error("core", "Failed to enable Windows VT support!");
+-                }
++                    // Setup Windows VT support as early as possible, to avoid escape codes being printed
++                    if (allocedConsole && Logger.earlyBootColorizedLogging && !Logger.TryEnableWindowsVTSupport()) {
++                        Logger.Error("core", "Failed to enable Windows VT support!");
++                    }
+ 
+-                MainInner(args);
++                    if (iosOriginalWorkingDirectory != null) {
++                        Environment.CurrentDirectory = iosOriginalWorkingDirectory;
++                        iosOriginalWorkingDirectory = null;
++                    }
++                    MainInner(args);
++                }
++            } finally {
++                if (iosOriginalWorkingDirectory != null)
++                    Environment.CurrentDirectory = iosOriginalWorkingDirectory;
+             }
+         }
+ 
 diff --git a/Celeste.Mod.mm/Patches/EventTrigger.cs b/Celeste.Mod.mm/Patches/EventTrigger.cs
 index 63909b40..52a3d04e 100644
 --- a/Celeste.Mod.mm/Patches/EventTrigger.cs
 +++ b/Celeste.Mod.mm/Patches/EventTrigger.cs
-@@ -1,5 +1,6 @@
+@@ -1,6 +1,7 @@
 -﻿#pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
 +#pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
  
@@ -775,7 +1206,9 @@ index 63909b40..52a3d04e 100644
 +using System.Linq;
  using Celeste.Mod;
  using Microsoft.Xna.Framework;
-@@ -80,19 +81,9 @@ namespace MonoMod {
+ using Monocle;
+@@ -79,98 +80,93 @@ namespace MonoMod {
+     static partial class MonoModRules {
  
          public static void PatchEventTriggerOnEnter(MethodDefinition method, CustomAttribute attrib) {
 -            // We also need to do special work in the cctor.
@@ -795,7 +1228,7 @@ index 63909b40..52a3d04e 100644
 -
              TypeDefinition td_LoadStrings = f_LoadStrings.FieldType.Resolve();
              MethodReference m_LoadStrings_Add = MonoModRule.Modder.Module.ImportReference(td_LoadStrings.FindMethod("Add"));
-@@ -100,76 +91,81 @@ namespace MonoMod {
+             m_LoadStrings_Add.DeclaringType = f_LoadStrings.FieldType;
              MethodReference m_LoadStrings_ctor = MonoModRule.Modder.Module.ImportReference(td_LoadStrings.FindMethod("System.Void .ctor()"));
              m_LoadStrings_ctor.DeclaringType = f_LoadStrings.FieldType;
 -            cctor_il.Emit(OpCodes.Newobj, m_LoadStrings_ctor);
@@ -938,11 +1371,13 @@ index 63909b40..52a3d04e 100644
 +            cctorIL.Append(cctorIL.Create(OpCodes.Ret));
          }
  
+     }
 diff --git a/Celeste.Mod.mm/Patches/Level.cs b/Celeste.Mod.mm/Patches/Level.cs
 index 7c82d5f1..da1e78af 100644
 --- a/Celeste.Mod.mm/Patches/Level.cs
 +++ b/Celeste.Mod.mm/Patches/Level.cs
-@@ -960,6 +960,5 @@ namespace MonoMod {
+@@ -959,8 +959,7 @@ namespace MonoMod {
+                 cursor.GotoNext(
                      instr => instr.MatchLdfld("Celeste.EntityData", "Name"), // cursor.Next (get entity name)
                      instr => instr.MatchStloc(out nameLoc), // cursor.Next.Next (save entity name)
 -                    instr => instr.MatchLdloc(out _),
@@ -950,17 +1385,21 @@ index 7c82d5f1..da1e78af 100644
 +                    instr => instr.MatchLdloc(out _)); // string-switch lowering varies by compiler; this prefix is stable
                  
                  // + _currentEntityData = entityData;
+                 // + _currentEntityId = entityId;
 diff --git a/Celeste.Mod.mm/Patches/Player.cs b/Celeste.Mod.mm/Patches/Player.cs
 index 88c74c26..6e371243 100644
 --- a/Celeste.Mod.mm/Patches/Player.cs
 +++ b/Celeste.Mod.mm/Patches/Player.cs
-@@ -10,4 +10,5 @@ using System;
+@@ -9,6 +9,7 @@ using MonoMod;
+ using System;
  using System.Collections;
  using System.Collections.Generic;
 +using System.Linq;
  using System.Runtime.CompilerServices;
  using Mono.Cecil;
-@@ -629,5 +630,10 @@ namespace MonoMod {
+ using Mono.Cecil.Cil;
+@@ -628,7 +629,12 @@ namespace MonoMod {
+             });
  
              // then hook another method given the context available.
 -            method = method.DeclaringType.FindMethod("<.ctor>b__280_1");
@@ -972,3 +1411,4 @@ index 88c74c26..6e371243 100644
 +                throw new InvalidOperationException("Could not find the Player constructor footstep callback to patch.");
  
              new ILContext(method).Invoke(il => {
+                 ILCursor cursor = new ILCursor(il);

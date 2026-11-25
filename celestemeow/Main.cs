@@ -309,7 +309,12 @@ namespace celestemeow
         {
             string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             string[] names = { "celeste-startup-trace.txt", "celeste-startup-error.txt", "log.txt", "errorLog.txt" };
-            return names.Select(name => Path.Combine(documents, name))
+            var paths = names.Select(name => Path.Combine(documents, name))
+                .Concat(new[] { Path.Combine(IOSModLibrary.DataPath, "log.txt") });
+            string crashLogDirectory = Path.Combine(IOSModLibrary.DataPath, "CrashLogs");
+            if (Directory.Exists(crashLogDirectory))
+                paths = paths.Concat(Directory.GetFiles(crashLogDirectory, "*.txt"));
+            return paths
                 .Where(File.Exists)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
