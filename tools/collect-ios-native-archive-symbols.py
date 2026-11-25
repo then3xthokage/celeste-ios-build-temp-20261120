@@ -155,7 +155,10 @@ def macho_defined_external_symbols(data: bytes, source: str) -> set[str]:
         if end < 0:
             raise ValueError(f"{source}: Mach-O symbol name is not terminated")
         name = strings[string_index:end].decode("utf-8", errors="replace")
-        if name:
+        # Export-list entries must be linkable ABI symbols. Apple's Mach-O C,
+        # Objective-C, and C++ external names carry the leading underscore;
+        # assembler-local labels such as l2327 are not exports and make ld fail.
+        if name.startswith("_"):
             symbols.add(name)
     return symbols
 
