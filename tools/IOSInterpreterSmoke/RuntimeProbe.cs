@@ -100,7 +100,7 @@ public static class RuntimeProbe
         AssertEqual("Woven managed calli on iOS interpreter", 42,
             calliType.GetMethod("Invoke").Invoke(null, new object[] { 25 }));
 
-        Mark("NLua generated callback and proxy probes");
+        Mark("NLua native Lua VM and generated callback/proxy probes");
         VerifyNLuaCodeGeneration(fixture);
 
         Mark("Everest-style constructor chain");
@@ -905,6 +905,13 @@ public static class RuntimeProbe
     private static void VerifyNLuaCodeGeneration(Assembly fixture)
     {
         Assembly nlua = typeof(NLua.Lua).Assembly;
+        using (NLua.Lua lua = new NLua.Lua())
+        {
+            object[] values = lua.DoString("return 6 * 7");
+            if (values == null || values.Length != 1 || !(values[0] is double result) || result != 42d)
+                throw new InvalidOperationException("NLua did not execute a Lua chunk through the bundled KeraLua native runtime.");
+        }
+
         Type codeGeneration = nlua.GetType("NLua.CodeGeneration", throwOnError: true);
         PropertyInfo instance = codeGeneration.GetProperty("Instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         if (instance == null || instance.GetValue(null) == null)
