@@ -251,7 +251,19 @@ public static class IOSHookWeaver
             if (main == null || !main.HasBody || main.Body.Instructions.Count == 0)
                 throw new InvalidDataException("The patched assembly does not contain static void Celeste.Celeste.Main(string[]) with a method body.");
 
-            Instruction[] instructions = main.Body.Instructions.ToArray();
+            MethodDefinition originalMain = celesteType.Methods.FirstOrDefault(method =>
+                string.Equals(method.Name, IOSHookIdentity.OriginalMethodName(main), StringComparison.Ordinal));
+            if (originalMain == null || !originalMain.HasBody || originalMain.Body.Instructions.Count == 0)
+                throw new InvalidDataException("The woven Celeste.Main wrapper has no callable original startup body.");
+
+            bool wrapperCallsOriginal = main.Body.Instructions.Any(instruction =>
+                instruction.Operand is MethodReference calledMethod &&
+                string.Equals(calledMethod.Name, originalMain.Name, StringComparison.Ordinal) &&
+                string.Equals(calledMethod.DeclaringType.FullName, originalMain.DeclaringType.FullName, StringComparison.Ordinal));
+            if (!wrapperCallsOriginal)
+                throw new InvalidDataException("The woven Celeste.Main launch wrapper does not call its original startup body.");
+
+            Instruction[] instructions = originalMain.Body.Instructions.ToArray();
             int dataKey = Array.FindIndex(instructions, instruction =>
                 instruction.OpCode == OpCodes.Ldstr &&
                 string.Equals(instruction.Operand as string, "Celeste.IOSHookRuntime.EverestDataPath", StringComparison.Ordinal));
@@ -272,7 +284,7 @@ public static class IOSHookWeaver
                 throw new InvalidDataException(
                     "Celeste.Celeste.Main must read the app-provided Everest data path, guard it, switch into that writable directory, and only then write BuildIsFNA.txt.");
 
-            Console.WriteLine("Verified Celeste.Main redirects Everest bootstrap writes to the app data directory before creating BuildIsFNA.txt: " + main.FullName + ".");
+            Console.WriteLine("Verified Celeste.Main calls its original body, which redirects Everest bootstrap writes to app data before creating BuildIsFNA.txt: " + main.FullName + ".");
         }
 
         return 0;
