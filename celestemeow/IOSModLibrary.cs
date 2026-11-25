@@ -131,6 +131,9 @@ namespace celestemeow
         private const int MaxGitHubRepositories = 8;
         private const int MaxGitHubReleaseAssets = 8;
         private const int CelesteGameBananaId = 6460;
+        private static readonly TimeSpan MetadataRequestTimeout = TimeSpan.FromSeconds(20);
+        private static readonly TimeSpan DownloadHeaderTimeout = TimeSpan.FromSeconds(45);
+        private static readonly TimeSpan DownloadIdleTimeout = TimeSpan.FromSeconds(60);
         private const string CommunityModCatalogUrl = "https://maddie480.ovh/celeste/custom-entity-catalog.json";
         private static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "CelesteMods");
         private static readonly string ModsDirectory = Path.Combine(Root, "Mods");
@@ -229,7 +232,10 @@ namespace celestemeow
         private static HttpClient CreateHttpClient()
         {
             HttpClient client = new HttpClient();
-            client.Timeout = TimeSpan.FromMinutes(15);
+            // Each metadata request and each download phase has its own bounded timeout.
+            // A total HttpClient timeout would incorrectly abort large campaigns that are
+            // still making steady progress.
+            client.Timeout = Timeout.InfiniteTimeSpan;
             client.DefaultRequestHeaders.UserAgent.ParseAdd("Celeste-iOS-Mod-Manager/1.0");
             return client;
         }
@@ -312,39 +318,35 @@ namespace celestemeow
             string url = string.IsNullOrWhiteSpace(query)
                 ? "https://maddie480.ovh/celeste/gamebanana-list?page=1&sort=downloads"
                 : "https://maddie480.ovh/celeste/gamebanana-search?q=" + Uri.EscapeDataString(query.Trim());
-            using (HttpResponseMessage response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
+            string json = await GetSmallTextAsync(url);
+            using (JsonDocument document = JsonDocument.Parse(json))
             {
-                response.EnsureSuccessStatusCode();
-                using (Stream stream = await response.Content.ReadAsStreamAsync())
-                using (JsonDocument document = await JsonDocument.ParseAsync(stream))
+                List<CatalogMod> result = new List<CatalogMod>();
+                foreach (JsonElement item in document.RootElement.EnumerateArray())
                 {
-                    List<CatalogMod> result = new List<CatalogMod>();
-                    foreach (JsonElement item in document.RootElement.EnumerateArray())
+                    string name = GetString(item, "Name");
+                    string author = GetString(item, "Author");
+                    string description = GetString(item, "Description");
+                    if (!item.TryGetProperty("Files", out JsonElement files) || files.ValueKind != JsonValueKind.Array) continue;
+                    foreach (JsonElement file in files.EnumerateArray())
                     {
-                        string name = GetString(item, "Name");
-                        string author = GetString(item, "Author");
-                        string description = GetString(item, "Description");
-                        if (!item.TryGetProperty("Files", out JsonElement files) || files.ValueKind != JsonValueKind.Array) continue;
-                        foreach (JsonElement file in files.EnumerateArray())
+                        if (!GetBool(file, "HasEverestYaml") || !GetBool(file, "IsLatestVersion")) continue;
+                        string fileUrl = GetString(file, "URL");
+                        if (string.IsNullOrWhiteSpace(fileUrl)) continue;
+                        result.Add(new CatalogMod
                         {
-                            if (!GetBool(file, "HasEverestYaml") || !GetBool(file, "IsLatestVersion")) continue;
-                            string fileUrl = GetString(file, "URL");
-                            if (string.IsNullOrWhiteSpace(fileUrl)) continue;
-                            result.Add(new CatalogMod
-                            {
-                                Name = name,
-                                Author = author,
-                                Description = description,
-                                FileDescription = GetString(file, "Description"),
-                                Url = fileUrl,
-                                MirrorName = GetString(file, "MirrorName"),
-                                DownloadName = GetString(file, "Name"),
-                                Size = GetLong(file, "Size")
-                            });
-                        }
+                            Name = name,
+                            Author = author,
+                            Description = description,
+                            FileDescription = GetString(file, "Description"),
+                            Url = fileUrl,
+                            MirrorName = GetString(file, "MirrorName"),
+                            DownloadName = GetString(file, "Name"),
+                            Size = GetLong(file, "Size")
+                        });
                     }
-                    return result.Take(100).ToList();
                 }
+                return result.Take(100).ToList();
             }
         }
 
@@ -860,16 +862,7 @@ namespace celestemeow
             string url = "https://gamebanana.com/apiv11/Util/Search/Results?_sSearchString=" +
                 Uri.EscapeDataString(query.Trim()) + "&_idGameRow=" + CelesteGameBananaId.ToString(CultureInfo.InvariantCulture) +
                 "&_sModelName=Mod&_nPage=1&_nPerpage=30";
-            using (HttpResponseMessage response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
-            {
-                response.EnsureSuccessStatusCode();
-                using (Stream stream = await response.Content.ReadAsStreamAsync())
-                using (MemoryStream buffer = new MemoryStream())
-                {
-                    await stream.CopyToAsync(buffer);
-                    return ParseGameBananaSearchResults(Encoding.UTF8.GetString(buffer.ToArray()));
-                }
-            }
+            return ParseGameBananaSearchResults(await GetSmallTextAsync(url));
         }
 
         private static async Task<List<CatalogMod>> SearchCommunityModCatalogAsync(
@@ -1026,16 +1019,7 @@ namespace celestemeow
         {
             string url = "https://api.gamebanana.com/Core/Item/Data?itemtype=Mod&itemid=" +
                 gameBananaId.ToString(CultureInfo.InvariantCulture) + "&fields=Files().aFiles()&return_keys=1&format=json";
-            using (HttpResponseMessage response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
-            {
-                response.EnsureSuccessStatusCode();
-                using (Stream stream = await response.Content.ReadAsStreamAsync())
-                using (MemoryStream buffer = new MemoryStream())
-                {
-                    await stream.CopyToAsync(buffer);
-                    return ParseGameBananaFiles(Encoding.UTF8.GetString(buffer.ToArray()));
-                }
-            }
+            return ParseGameBananaFiles(await GetSmallTextAsync(url));
         }
 
         private static List<GameBananaFile> ParseGameBananaFiles(string json)
@@ -1386,7 +1370,7 @@ namespace celestemeow
                 throw new InvalidDataException("GitHub returned an unexpected release-download address.");
 
             progress?.Report("Downloading from github.com...");
-            using (HttpResponseMessage response = await Http.GetAsync(asset.Url, HttpCompletionOption.ResponseHeadersRead))
+            using (HttpResponseMessage response = await GetResponseWithTimeoutAsync(asset.Url, DownloadHeaderTimeout))
             {
                 response.EnsureSuccessStatusCode();
                 Uri finalUrl = response.RequestMessage == null ? null : response.RequestMessage.RequestUri;
@@ -1403,7 +1387,7 @@ namespace celestemeow
 
                 using (Stream input = await response.Content.ReadAsStreamAsync())
                 using (FileStream output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None))
-                    await input.CopyToAsync(output);
+                    await CopyWithIdleTimeoutAsync(input, output, DownloadIdleTimeout, finalUrl.Host);
             }
 
             if (!File.Exists(destination) || new FileInfo(destination).Length != asset.Size)
@@ -1503,8 +1487,60 @@ namespace celestemeow
 
         private static async Task<string> GetSmallTextAsync(string url)
         {
-            using (CancellationTokenSource timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
+            using (CancellationTokenSource timeout = new CancellationTokenSource(MetadataRequestTimeout))
                 return await Http.GetStringAsync(url, timeout.Token);
+        }
+
+        private static async Task<HttpResponseMessage> GetResponseWithTimeoutAsync(string url, TimeSpan timeout)
+        {
+            Uri address;
+            string host = Uri.TryCreate(url, UriKind.Absolute, out address) ? address.Host : "the download source";
+            using (CancellationTokenSource requestTimeout = new CancellationTokenSource(timeout))
+            {
+                try
+                {
+                    return await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, requestTimeout.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException exception)
+                {
+                    throw new TimeoutException(
+                        "No response arrived from " + host + " within " + timeout.TotalSeconds.ToString("0") + " seconds.",
+                        exception);
+                }
+            }
+        }
+
+        internal static async Task CopyWithIdleTimeoutAsync(Stream input, Stream output, TimeSpan idleTimeout, string sourceHost)
+        {
+            if (input == null) throw new ArgumentNullException(nameof(input));
+            if (output == null) throw new ArgumentNullException(nameof(output));
+            if (idleTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(idleTimeout));
+
+            byte[] buffer = new byte[81920];
+            while (true)
+            {
+                int count;
+                using (CancellationTokenSource readTimeout = new CancellationTokenSource(idleTimeout))
+                {
+                    try
+                    {
+                        count = await input.ReadAsync(buffer, 0, buffer.Length, readTimeout.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException exception)
+                    {
+                        string source = string.IsNullOrWhiteSpace(sourceHost) ? "the download source" : sourceHost;
+                        throw new TimeoutException(
+                            "No download data arrived from " + source + " for " + idleTimeout.TotalSeconds.ToString("0") + " seconds.",
+                            exception);
+                    }
+                }
+
+                if (count == 0) break;
+                await output.WriteAsync(buffer, 0, count).ConfigureAwait(false);
+            }
+
+            await output.FlushAsync().ConfigureAwait(false);
         }
 
         private static void ApplyDependencyGraph(PackageInfo package, ModDependencyResolver graph)
@@ -1790,12 +1826,12 @@ namespace celestemeow
                 try
                 {
                     progress?.Report("Downloading from " + candidateUri.Host + "...");
-                    using (HttpResponseMessage response = await Http.GetAsync(candidate, HttpCompletionOption.ResponseHeadersRead))
+                    using (HttpResponseMessage response = await GetResponseWithTimeoutAsync(candidate, DownloadHeaderTimeout))
                     {
                         response.EnsureSuccessStatusCode();
                         using (Stream input = await response.Content.ReadAsStreamAsync())
                         using (FileStream output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None))
-                            await input.CopyToAsync(output);
+                            await CopyWithIdleTimeoutAsync(input, output, DownloadIdleTimeout, candidateUri.Host);
                     }
                     using (ZipArchive archive = ZipFile.OpenRead(destination))
                     {
@@ -1806,6 +1842,8 @@ namespace celestemeow
                 catch (Exception exception)
                 {
                     lastError = exception;
+                    if (exception is TimeoutException)
+                        progress?.Report("The source stopped responding; trying the next download source...");
                     if (File.Exists(destination)) File.Delete(destination);
                 }
             }

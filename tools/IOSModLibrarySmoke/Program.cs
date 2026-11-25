@@ -8,6 +8,7 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        await VerifyDownloadStreamTimeoutsAsync();
         VerifyNormalizedNames();
         VerifyGameBananaCandidateRanking();
         VerifyDependencySearchQueryVariants();
@@ -29,11 +30,68 @@ internal static class Program
         if (args.Contains("--live-legacy-version", StringComparer.OrdinalIgnoreCase))
             await VerifyLiveLegacyDependencyVersionAsync();
         if (args.Contains("--live-map-version-audit", StringComparer.OrdinalIgnoreCase))
-            await AuditLiveMapDependencyVersionsAsync();
+            await AuditLiveMapDependencyVersionsAsync(false);
+        if (args.Contains("--live-full-graph-version-audit", StringComparer.OrdinalIgnoreCase))
+            await AuditLiveMapDependencyVersionsAsync(true);
         if (args.Contains("--live-spark-audio", StringComparer.OrdinalIgnoreCase))
             await VerifyLiveDependencyAsync(new ModDependency { Name = "SparkInTheMachineAudio", Version = "1.0.2" });
         Console.WriteLine("PASS iOS mod dependency and map-package smoke checks");
         return 0;
+    }
+
+    private static async Task VerifyDownloadStreamTimeoutsAsync()
+    {
+        byte[] payload = { 0x43, 0x65, 0x6c, 0x65, 0x73, 0x74, 0x65 };
+        using (MemoryStream source = new MemoryStream(payload))
+        using (MemoryStream destination = new MemoryStream())
+        {
+            await IOSModLibrary.CopyWithIdleTimeoutAsync(source, destination, TimeSpan.FromSeconds(1), "smoke.test");
+            Require(payload.SequenceEqual(destination.ToArray()),
+                "The package downloader should preserve a successful streamed archive body.");
+        }
+
+        bool timedOut = false;
+        using (StallingStream source = new StallingStream())
+        using (MemoryStream destination = new MemoryStream())
+        {
+            try
+            {
+                await IOSModLibrary.CopyWithIdleTimeoutAsync(source, destination, TimeSpan.FromMilliseconds(100), "stalled.test");
+            }
+            catch (TimeoutException exception)
+            {
+                timedOut = exception.Message.Contains("stalled.test", StringComparison.Ordinal);
+            }
+        }
+
+        Require(timedOut, "A package source that stops sending bytes should time out with its host identified.");
+        Console.WriteLine("PASS mod download streaming and stalled-source timeout");
+    }
+
+    private sealed class StallingStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            return WaitForCancellationAsync(cancellationToken);
+        }
+
+        private static async Task<int> WaitForCancellationAsync(CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private static void VerifyNormalizedNames()
@@ -262,7 +320,7 @@ internal static class Program
         }
     }
 
-    private static async Task AuditLiveMapDependencyVersionsAsync()
+    private static async Task AuditLiveMapDependencyVersionsAsync(bool includeEveryGraphEntry)
     {
         string[] campaignRoots =
         {
@@ -283,16 +341,20 @@ internal static class Program
         FieldInfo graphField = typeof(ModDependencyResolver).GetField("graph", BindingFlags.NonPublic | BindingFlags.Instance);
         Require(graphField != null, "The dependency graph index is unavailable to the live audit.");
         var graphEntries = (System.Collections.IDictionary)graphField.GetValue(graph);
+        string[] roots = includeEveryGraphEntry
+            ? graphEntries.Keys.Cast<string>().OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray()
+            : campaignRoots;
         var allRootDependencies = new List<ModDependency>();
         var failures = new List<string>();
         int optionalDependencyEdges = 0;
 
-        foreach (string campaignRoot in campaignRoots)
+        foreach (string campaignRoot in roots)
         {
-            string normalizedRoot = ModDependencyResolver.NormalizeName(campaignRoot);
-            string[] graphNames = graphEntries.Keys.Cast<string>()
-                .Where(name => ModDependencyResolver.NormalizeName(name) == normalizedRoot)
-                .ToArray();
+            string[] graphNames = includeEveryGraphEntry
+                ? graphEntries.Contains(campaignRoot) ? new[] { campaignRoot } : Array.Empty<string>()
+                : graphEntries.Keys.Cast<string>()
+                    .Where(name => ModDependencyResolver.NormalizeName(name) == ModDependencyResolver.NormalizeName(campaignRoot))
+                    .ToArray();
             if (graphNames.Length != 1)
             {
                 failures.Add(campaignRoot + ": expected one Everest graph entry, found " + graphNames.Length + ".");
@@ -305,11 +367,14 @@ internal static class Program
             IReadOnlyList<ModDependency> closure = graph.ResolveRequiredClosure(direct);
             optionalDependencyEdges += optional.Count;
             allRootDependencies.AddRange(direct);
-            Console.WriteLine("ROOT " + graphNames[0] + ": " + direct.Count + " direct required, " +
-                closure.Count + " transitive required, " + optional.Count + " optional.");
+            if (!includeEveryGraphEntry)
+                Console.WriteLine("ROOT " + graphNames[0] + ": " + direct.Count + " direct required, " +
+                    closure.Count + " transitive required, " + optional.Count + " optional.");
         }
 
-        Require(failures.Count == 0, "One or more requested campaigns are missing from Everest's graph: " + string.Join(" | ", failures));
+        if (includeEveryGraphEntry)
+            Console.WriteLine("Everest dependency graph entries: " + roots.Length + ".");
+        Require(failures.Count == 0, "One or more requested roots are missing from Everest's graph: " + string.Join(" | ", failures));
         List<ModDependency> requiredClosure = graph.ResolveRequiredClosure(allRootDependencies).ToList();
         System.Collections.IDictionary catalog =
             (System.Collections.IDictionary)await InvokePrivateAsync("DownloadUpdateCatalogAsync");
@@ -344,6 +409,7 @@ internal static class Program
                 continue;
             }
 
+            Console.WriteLine("CHECKING ARCHIVED FALLBACK " + dependency.Name + " " + dependency.Version + ".");
             string path = Path.Combine(Path.GetTempPath(), "celeste-ios-map-version-" + Guid.NewGuid().ToString("N") + ".zip");
             try
             {
@@ -372,10 +438,12 @@ internal static class Program
         {
             foreach (string failure in failures)
                 Console.WriteLine("UNRESOLVED " + failure);
-            throw new InvalidOperationException("Everest's live campaign dependency audit has " + failures.Count + " unresolved requirement(s).");
+            throw new InvalidOperationException("Everest's live dependency audit has " + failures.Count + " unresolved requirement(s).");
         }
 
-        Console.WriteLine("PASS live Everest campaign graph and dependency catalog audit.");
+        Console.WriteLine(includeEveryGraphEntry
+            ? "PASS live Everest full dependency graph and catalog audit."
+            : "PASS live Everest campaign graph and dependency catalog audit.");
     }
 
     private static object FindCatalogUpdate(System.Collections.IDictionary catalog, string moduleName)

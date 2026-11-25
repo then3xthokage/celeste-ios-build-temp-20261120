@@ -278,13 +278,40 @@ public static class IOSHookWeaver
             int writeFlag = FindMethodCallIndex(instructions, "System.IO.File", "WriteAllText", buildFlag + 1);
             int nullGuard = FindMethodCallIndex(instructions, "System.String", "IsNullOrWhiteSpace", getData + 1);
 
+            int[] mainInnerCalls = instructions
+                .Select((instruction, index) => new { instruction, index })
+                .Where(item => item.instruction.Operand is MethodReference calledMethod &&
+                    string.Equals(calledMethod.DeclaringType.FullName, "Celeste.Celeste", StringComparison.Ordinal) &&
+                    string.Equals(calledMethod.Name, "MainInner", StringComparison.Ordinal))
+                .Select(item => item.index)
+                .ToArray();
+            bool restoresWorkingDirectoryBeforeEveryGameEntry = mainInnerCalls.Length > 0 && mainInnerCalls.All(mainInner =>
+                Array.FindLastIndex(instructions, mainInner, mainInner - 1, instruction =>
+                    instruction.Operand is MethodReference calledMethod &&
+                    string.Equals(calledMethod.DeclaringType.FullName, "System.Environment", StringComparison.Ordinal) &&
+                    string.Equals(calledMethod.Name, "set_CurrentDirectory", StringComparison.Ordinal)) > writeFlag);
+            bool restoresWorkingDirectoryOnFailure = originalMain.Body.ExceptionHandlers.Any(handler =>
+            {
+                if (handler.HandlerType != ExceptionHandlerType.Finally || handler.HandlerStart == null || handler.HandlerEnd == null)
+                    return false;
+                int start = Array.IndexOf(instructions, handler.HandlerStart);
+                int end = handler.HandlerEnd == null ? instructions.Length : Array.IndexOf(instructions, handler.HandlerEnd);
+                if (start < 0) return false;
+                if (end < 0) end = instructions.Length;
+                return instructions.Skip(start).Take(end - start).Any(instruction =>
+                    instruction.Operand is MethodReference calledMethod &&
+                    string.Equals(calledMethod.DeclaringType.FullName, "System.Environment", StringComparison.Ordinal) &&
+                    string.Equals(calledMethod.Name, "set_CurrentDirectory", StringComparison.Ordinal));
+            });
+
             if (dataKey < 0 || getData <= dataKey || fullPathCall <= getData || createDirectory <= fullPathCall ||
                 getCurrentDirectory <= createDirectory || setCurrentDirectory <= getCurrentDirectory ||
-                nullGuard <= getData || nullGuard >= setCurrentDirectory || buildFlag <= setCurrentDirectory || writeFlag <= buildFlag)
+                nullGuard <= getData || nullGuard >= setCurrentDirectory || buildFlag <= setCurrentDirectory || writeFlag <= buildFlag ||
+                !restoresWorkingDirectoryBeforeEveryGameEntry || !restoresWorkingDirectoryOnFailure)
                 throw new InvalidDataException(
-                    "Celeste.Celeste.Main must read the app-provided Everest data path, guard it, switch into that writable directory, and only then write BuildIsFNA.txt.");
+                    "Celeste.Celeste.Main must write bootstrap files in app data, restore the game bundle directory before each game entry, and restore it when startup fails.");
 
-            Console.WriteLine("Verified Celeste.Main calls its original body, which redirects Everest bootstrap writes to app data before creating BuildIsFNA.txt: " + main.FullName + ".");
+            Console.WriteLine("Verified Celeste.Main redirects bootstrap writes to app data and restores the game bundle directory before game startup and on failure: " + main.FullName + ".");
         }
 
         return 0;
