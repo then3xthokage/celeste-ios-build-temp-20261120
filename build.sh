@@ -892,6 +892,33 @@ if [ -z "$ipa_path" ]; then
 	error "the iOS app package was not generated"
 	exit 1
 fi
+
+info "verifying Celeste.dll inside the finished IPA"
+packaged_celeste="$script_dir/celeste/IPA-Celeste.dll"
+if ! python3 - "$ipa_path" "$packaged_celeste" <<'PY'
+import sys
+import zipfile
+
+ipa_path, output_path = sys.argv[1:]
+with zipfile.ZipFile(ipa_path) as ipa:
+    matches = [name for name in ipa.namelist()
+               if ".app/" in name and name.endswith("/Celeste.dll")]
+    if len(matches) != 1:
+        raise SystemExit(f"Expected exactly one Celeste.dll in the packaged app; found {len(matches)}: {matches}")
+    with open(output_path, "wb") as output:
+        output.write(ipa.read(matches[0]))
+    print(f"Extracted packaged {matches[0]} for startup-path verification")
+PY
+then
+	error "could not inspect the Celeste assembly in the finished IPA"
+	exit 1
+fi
+if ! dotnet run --project "$script_dir/tools/IOSHookWeaver/IOSHookWeaver.csproj" \
+	--configuration Release -- --verify-celeste-main "$packaged_celeste"; then
+	error "the finished IPA does not contain the verified writable-startup-path fix"
+	exit 1
+fi
+
 if ! python3 "$script_dir/tools/verify-ios-native-exports.py" "$ipa_path" --native-imports "$native_import_manifest"; then
 	error "the packaged iOS app does not export every required runtime import and platform entry point"
 	exit 1

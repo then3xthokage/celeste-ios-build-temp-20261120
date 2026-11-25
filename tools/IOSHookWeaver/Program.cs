@@ -251,22 +251,47 @@ public static class IOSHookWeaver
             if (main == null || !main.HasBody || main.Body.Instructions.Count == 0)
                 throw new InvalidDataException("The patched assembly does not contain static void Celeste.Celeste.Main(string[]) with a method body.");
 
-            bool redirectsBootstrapFiles = celesteType.Methods
-                .Where(method => method.HasBody)
-                .Any(method => method.Body.Instructions.Any(instruction =>
-                    instruction.OpCode == OpCodes.Ldstr &&
-                    string.Equals(instruction.Operand as string, "Celeste.IOSHookRuntime.EverestDataPath", StringComparison.Ordinal)) &&
-                    method.Body.Instructions.Any(instruction =>
-                        instruction.Operand is MethodReference calledMethod &&
-                        string.Equals(calledMethod.DeclaringType.FullName, "System.Environment", StringComparison.Ordinal) &&
-                        string.Equals(calledMethod.Name, "set_CurrentDirectory", StringComparison.Ordinal)));
-            if (!redirectsBootstrapFiles)
-                throw new InvalidDataException("Patched Celeste.Main is missing the iOS writable-bootstrap-path redirect.");
+            Instruction[] instructions = main.Body.Instructions.ToArray();
+            int dataKey = Array.FindIndex(instructions, instruction =>
+                instruction.OpCode == OpCodes.Ldstr &&
+                string.Equals(instruction.Operand as string, "Celeste.IOSHookRuntime.EverestDataPath", StringComparison.Ordinal));
+            int getData = FindMethodCallIndex(instructions, "System.AppDomain", "GetData", dataKey + 1);
+            int fullPath = FindMethodCallIndex(instructions, "System.IO.Path", "GetFullPath", getData + 1);
+            int createDirectory = FindMethodCallIndex(instructions, "System.IO.Directory", "CreateDirectory", fullPath + 1);
+            int getCurrentDirectory = FindMethodCallIndex(instructions, "System.Environment", "get_CurrentDirectory", createDirectory + 1);
+            int setCurrentDirectory = FindMethodCallIndex(instructions, "System.Environment", "set_CurrentDirectory", getCurrentDirectory + 1);
+            int buildFlag = Array.FindIndex(instructions, setCurrentDirectory + 1, instruction =>
+                instruction.OpCode == OpCodes.Ldstr &&
+                string.Equals(instruction.Operand as string, "BuildIsFNA.txt", StringComparison.Ordinal));
+            int writeFlag = FindMethodCallIndex(instructions, "System.IO.File", "WriteAllText", buildFlag + 1);
+            int nullGuard = FindMethodCallIndex(instructions, "System.String", "IsNullOrWhiteSpace", getData + 1);
 
-            Console.WriteLine("Verified iOS game launch method and writable Everest bootstrap paths: " + main.FullName + ".");
+            if (dataKey < 0 || getData <= dataKey || fullPath <= getData || createDirectory <= fullPath ||
+                getCurrentDirectory <= createDirectory || setCurrentDirectory <= getCurrentDirectory ||
+                nullGuard <= getData || nullGuard >= setCurrentDirectory || buildFlag <= setCurrentDirectory || writeFlag <= buildFlag)
+                throw new InvalidDataException(
+                    "Celeste.Celeste.Main must read the app-provided Everest data path, guard it, switch into that writable directory, and only then write BuildIsFNA.txt.");
+
+            Console.WriteLine("Verified Celeste.Main redirects Everest bootstrap writes to the app data directory before creating BuildIsFNA.txt: " + main.FullName + ".");
         }
 
         return 0;
+    }
+
+    private static int FindMethodCallIndex(Instruction[] instructions, string declaringType, string methodName, int startIndex)
+    {
+        if (instructions == null || startIndex < 0 || startIndex >= instructions.Length)
+            return -1;
+
+        for (int index = startIndex; index < instructions.Length; index++)
+        {
+            if (instructions[index].Operand is MethodReference method &&
+                string.Equals(method.DeclaringType.FullName, declaringType, StringComparison.Ordinal) &&
+                string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                return index;
+        }
+
+        return -1;
     }
 #endif
 

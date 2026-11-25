@@ -299,6 +299,28 @@ namespace celestemeow
             TraceStartup("Everest requested a full restart; returning to the launcher for a clean app relaunch.");
         }
 
+        static string PrepareEverestDataDirectory()
+        {
+            string dataDirectory = Path.GetFullPath(IOSModLibrary.DataPath);
+            Directory.CreateDirectory(dataDirectory);
+
+            // Fail here with a clear path if iOS storage is unavailable, before Everest
+            // attempts its first relative write while starting the game.
+            string probePath = Path.Combine(dataDirectory, ".celeste-ios-write-probe-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                using (FileStream probe = new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    probe.WriteByte(0);
+            }
+            finally
+            {
+                try { File.Delete(probePath); }
+                catch { }
+            }
+
+            return dataDirectory;
+        }
+
         static void ReportStartupException(Exception exception)
         {
             TraceStartup("startup exception captured: " + exception.GetType().FullName);
@@ -347,11 +369,17 @@ namespace celestemeow
             IOSNativeImports.EnsureRequiredImportsAreLinked();
             RegisterIOSClipboardDelegates();
             IOSHookRuntime.Initialize();
-            string dataDirectory = IOSModLibrary.DataPath;
+            string dataDirectory = PrepareEverestDataDirectory();
             string temporaryDirectory = Path.Combine(dataDirectory, "tmp");
             Directory.CreateDirectory(temporaryDirectory);
             Environment.SetEnvironmentVariable("EVEREST_TMPDIR", temporaryDirectory);
             AppDomain.CurrentDomain.SetData("Celeste.IOSHookRuntime.EverestDataPath", dataDirectory);
+            if (!string.Equals(
+                AppDomain.CurrentDomain.GetData("Celeste.IOSHookRuntime.EverestDataPath") as string,
+                dataDirectory,
+                StringComparison.Ordinal))
+                throw new InvalidOperationException("Everest's writable iOS data path was not registered before game startup.");
+            TraceStartup("Everest writable data path verified: " + dataDirectory);
             AppDomain.CurrentDomain.SetData("Celeste.IOSHookRuntime.RequestCelesteRestart", (Action)RequestCelesteRestart);
 
             string bundleDirectory = string.IsNullOrWhiteSpace(appBundleDirectory)
@@ -386,7 +414,7 @@ namespace celestemeow
                 throw new MissingMethodException("Could not find static void Celeste.Celeste.Main(string[]).");
             }
 
-            TraceStartup("invoking patched Celeste.Main");
+            TraceStartup("invoking patched Celeste.Main; current directory=" + Environment.CurrentDirectory);
             method.Invoke(null, new object[] { args });
             TraceStartup("patched Celeste.Main returned");
         }
