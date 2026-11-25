@@ -830,9 +830,6 @@ fi
 info "generating the native export list for runtime-loaded Celeste, FNA, and Everest code"
 native_export_manifest="$script_dir/ios-native-exports.txt"
 native_arm64_exports="$RUNNER_TEMP/ios-native-arm64-exports.txt"
-native_arm64_private_exports="$RUNNER_TEMP/ios-native-arm64-private-exports.txt"
-: > "$native_arm64_exports"
-: > "$native_arm64_private_exports"
 native_archives=(
 	"$script_dir/celestemeow/libSDL2.a"
 	"$script_dir/celestemeow/libFNA3D.a"
@@ -847,56 +844,21 @@ for archive in "${native_archives[@]}"; do
 		error "native archive for export collection is missing: $archive"
 		exit 1
 	fi
-	if ! (set -o pipefail; nm -arch arm64 -gU "$archive" | awk 'NF >= 3 && $NF ~ /^_/ { print $NF }' >> "$native_arm64_exports"); then
-		error "failed to collect arm64 native exports from $(basename "$archive")"
-		exit 1
-	fi
-	if ! (set -o pipefail; nm -arch arm64 -m -U "$archive" | awk '/private external/ && !/non-external/ { symbol = $NF; if (symbol ~ /^_/) print symbol }' >> "$native_arm64_private_exports"); then
-		error "failed to collect arm64 private-external definitions from $(basename "$archive")"
-		exit 1
-	fi
 done
 
-if ! LC_ALL=C sort -u "$native_arm64_exports" -o "$native_arm64_exports" || ! [ -s "$native_arm64_exports" ]; then
+if ! python3 "$script_dir/tools/collect-ios-native-archive-symbols.py" "${native_archives[@]}" > "$native_arm64_exports"; then
+	error "failed to collect defined external symbols from the arm64 native archives"
+	exit 1
+fi
+if ! LC_ALL=C sort -u "$native_import_manifest" -o "$native_import_manifest" || \
+	! LC_ALL=C sort -u "$native_arm64_exports" -o "$native_arm64_exports" || \
+	! [ -s "$native_arm64_exports" ]; then
 	error "failed to finalize the arm64 native export list"
 	exit 1
 fi
-if ! LC_ALL=C sort -u "$native_arm64_private_exports" -o "$native_arm64_private_exports"; then
-	error "failed to finalize the arm64 private-external symbol list"
-	exit 1
-fi
 missing_arm64_imports="$RUNNER_TEMP/ios-native-missing-arm64-imports.txt"
-private_arm64_imports="$RUNNER_TEMP/ios-native-private-arm64-imports.txt"
-if ! comm -23 "$native_import_manifest" "$native_arm64_exports" > "$missing_arm64_imports" || \
-	! comm -12 "$missing_arm64_imports" "$native_arm64_private_exports" > "$private_arm64_imports" || \
-	! comm -23 "$missing_arm64_imports" "$native_arm64_private_exports" > "$missing_arm64_imports.tmp" || \
-	! mv "$missing_arm64_imports.tmp" "$missing_arm64_imports"; then
+if ! comm -23 "$native_import_manifest" "$native_arm64_exports" > "$missing_arm64_imports"; then
 	error "failed to compare managed imports with arm64 native exports"
-	exit 1
-fi
-# These symbols are defined in the iOS arm64 native archives supplied to this
-# build, but the archive-level nm scan omits them. Keep this list limited to
-# symbols verified in those archives; the final IPA export verifier still has
-# to find every one in the linked executable.
-known_nm_omitted_arm64_imports=(
-	"_SDL_ClearError"
-	"_SDL_GetError"
-	"_SDL_GetErrorMsg"
-	"_SDL_SetError"
-	"_FMOD_ChannelGroup_Get3DMinMaxDistance"
-	"_FMOD_ChannelGroup_Set3DMinMaxDistance"
-	"_FMOD_Sound_Get3DMinMaxDistance"
-	"_FMOD_Sound_Set3DMinMaxDistance"
-)
-for symbol in "${known_nm_omitted_arm64_imports[@]}"; do
-	if grep -Fxq "$symbol" "$missing_arm64_imports"; then
-		printf '%s\n' "$symbol" >> "$private_arm64_imports"
-	fi
-done
-if ! LC_ALL=C sort -u "$private_arm64_imports" -o "$private_arm64_imports" || \
-	! comm -23 "$missing_arm64_imports" "$private_arm64_imports" > "$missing_arm64_imports.tmp" || \
-	! mv "$missing_arm64_imports.tmp" "$missing_arm64_imports"; then
-	error "failed to resolve known private-external arm64 imports"
 	exit 1
 fi
 if [ -s "$missing_arm64_imports" ]; then
