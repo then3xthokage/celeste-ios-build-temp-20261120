@@ -19,6 +19,7 @@ internal static class Program
         VerifyGitHubReleaseAssetParsing();
         VerifyGitHubReleaseChecksum();
         VerifyEverestVersionCompatibility();
+        VerifyBuiltInDependencyMismatchDiagnostics();
         VerifyUniqueModuleAlias();
         VerifyAmbiguousModuleAliasIsRejected();
         VerifyEverestDummyModuleFallbackKeepsCampaignMaps();
@@ -488,6 +489,26 @@ internal static class Program
             "A different major version must not satisfy an Everest dependency.");
         Require((bool)InvokePrivate("VersionSatisfies", "1.2.0", "0.0.0-dummy"),
             "Everest dummy modules must retain Everest's 0.0.* compatibility behavior.");
+    }
+
+    private static void VerifyBuiltInDependencyMismatchDiagnostics()
+    {
+        ModDependency celesteDependency = new ModDependency { Name = "Celeste", Version = "1.5.0" };
+        Require(!(bool)InvokePrivate("IsBuiltInDependencySatisfied", celesteDependency),
+            "A mod requiring a newer Celeste base must not be treated as installed.");
+        string celesteMessage = (string)InvokePrivate("DescribeBuiltInDependencyMismatch", celesteDependency);
+        Require(celesteMessage.Contains("Celeste 1.5.0", StringComparison.Ordinal) &&
+            celesteMessage.Contains("includes Celeste 1.4.0.0", StringComparison.Ordinal),
+            "A newer Celeste requirement should explain the bundled version and recommend a compatible release.");
+
+        ModDependency compatibleEverest = new ModDependency { Name = "Everest", Version = "1.2.0" };
+        Require((bool)InvokePrivate("IsBuiltInDependencySatisfied", compatibleEverest),
+            "A compatible Everest 1.x requirement should be satisfied by the bundled Everest core.");
+        ModDependency newerEverest = new ModDependency { Name = "Everest", Version = "2.0.0" };
+        string everestMessage = (string)InvokePrivate("DescribeBuiltInDependencyMismatch", newerEverest);
+        Require(!(bool)InvokePrivate("IsBuiltInDependencySatisfied", newerEverest) &&
+            everestMessage.Contains("includes Everest 1.6696.0", StringComparison.Ordinal),
+            "An incompatible Everest major version should show the bundled core version.");
     }
 
     private static void VerifyUniqueModuleAlias()

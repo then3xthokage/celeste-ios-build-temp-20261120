@@ -591,7 +591,7 @@ namespace celestemeow
             if (IsBuiltInDependency(dependency.Name))
             {
                 if (!IsBuiltInDependencySatisfied(dependency))
-                    throw new InvalidDataException("The bundled " + dependency.Name + " version does not satisfy the required " + dependency.Version + ".");
+                    throw new InvalidDataException(DescribeBuiltInDependencyMismatch(dependency));
                 return;
             }
 
@@ -1588,7 +1588,7 @@ namespace celestemeow
                 if (IsBuiltInDependency(dependency.Name))
                 {
                     if (!IsBuiltInDependencySatisfied(dependency))
-                        missing.Add(FormatDependency(dependency));
+                        missing.Add(DescribeBuiltInDependencyMismatch(dependency));
                     continue;
                 }
 
@@ -1651,7 +1651,7 @@ namespace celestemeow
             if (IsBuiltInDependency(dependency.Name))
             {
                 if (!IsBuiltInDependencySatisfied(dependency))
-                    throw new InvalidDataException(parent.Name + " requires " + dependency.Name + " " + dependency.Version + ", which is newer than the bundled version.");
+                    throw new InvalidDataException(parent.Name + ": " + DescribeBuiltInDependencyMismatch(dependency));
                 return;
             }
             ModMetadata sameArchive = FindModule(parent, dependency.Name);
@@ -1748,13 +1748,28 @@ namespace celestemeow
         private static bool IsBuiltInDependencySatisfied(ModDependency dependency)
         {
             if (dependency == null || string.IsNullOrWhiteSpace(dependency.Version)) return true;
-            if (string.Equals(dependency.Name, "Everest", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(dependency.Name, "EverestCore", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(dependency.Name, "API", StringComparison.OrdinalIgnoreCase))
-                return VersionSatisfies(dependency.Version, "1.6696.0");
-            if (string.Equals(dependency.Name, "Celeste", StringComparison.OrdinalIgnoreCase))
-                return VersionSatisfies(dependency.Version, "1.4.0.0");
-            return true;
+            string installedVersion = GetBuiltInDependencyVersion(dependency.Name);
+            return installedVersion == null || VersionSatisfies(dependency.Version, installedVersion);
+        }
+
+        private static string DescribeBuiltInDependencyMismatch(ModDependency dependency)
+        {
+            string installedVersion = GetBuiltInDependencyVersion(dependency?.Name);
+            if (installedVersion == null)
+                return "A required bundled game component is unavailable.";
+            return "Requires " + dependency.Name + " " + dependency.Version + "; this iOS build includes " +
+                dependency.Name + " " + installedVersion + ". Choose a mod release compatible with the bundled game and Everest versions.";
+        }
+
+        private static string GetBuiltInDependencyVersion(string name)
+        {
+            if (string.Equals(name, "Everest", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "EverestCore", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "API", StringComparison.OrdinalIgnoreCase))
+                return "1.6696.0";
+            if (string.Equals(name, "Celeste", StringComparison.OrdinalIgnoreCase))
+                return "1.4.0.0";
+            return null;
         }
 
         private static bool VersionSatisfies(string requiredText, string installedText)
